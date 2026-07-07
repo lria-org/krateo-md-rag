@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🔥 Firecrawl · Live Scraper</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181b22; --card2:#1f232c; --border:#2a2f3a;
+    --text:#e6e8ec; --muted:#9aa3b2; --accent:#ff6a2b; --accent2:#ffb020;
+    --green:#3fb950; --red:#f85149; --blue:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 70% -10%,#20130b 0%,var(--bg) 55%);color:var(--text);min-height:100vh}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:22px;margin:0 0 2px;display:flex;align-items:center;gap:10px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px;text-transform:uppercase;letter-spacing:.04em}
+  input,select{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);
+    padding:11px 12px;border-radius:9px;font-size:14px;outline:none}
+  input:focus,select:focus{border-color:var(--accent)}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:120px}
+  .grow{flex:3 1 260px}
+  button{cursor:pointer;border:none;border-radius:9px;font-size:14px;font-weight:600;padding:11px 18px;transition:.15s}
+  .btn-go{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#1a1204;width:100%;margin-top:14px}
+  .btn-go:hover{filter:brightness(1.08)}
+  .btn-go:disabled{opacity:.5;cursor:not-allowed;filter:none}
+  .btn-save{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.35)}
+  .btn-save:hover{background:rgba(63,185,80,.25)}
+  .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+  .btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+  .hidden{display:none}
+  .status-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .badge{font-size:12px;font-weight:700;padding:5px 11px;border-radius:20px;text-transform:uppercase;letter-spacing:.05em}
+  .b-scraping{background:rgba(88,166,255,.15);color:var(--blue)}
+  .b-completed{background:rgba(63,185,80,.15);color:var(--green)}
+  .b-failed{background:rgba(248,81,73,.15);color:var(--red)}
+  .b-idle{background:rgba(154,163,178,.15);color:var(--muted)}
+  .bar{height:12px;background:var(--card2);border-radius:8px;overflow:hidden;margin:14px 0 6px}
+  .bar>span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .4s ease}
+  .metrics{display:flex;gap:22px;flex-wrap:wrap;color:var(--muted);font-size:13px}
+  .metrics b{color:var(--text);font-size:16px}
+  .metrics div{display:flex;flex-direction:column}
+  .pages{margin-top:6px}
+  .page{background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-top:8px}
+  .page summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:2px}
+  .page summary::-webkit-details-marker{display:none}
+  .page .t{font-weight:600;font-size:14px}
+  .page .u{color:var(--muted);font-size:12px;word-break:break-all}
+  .page pre{white-space:pre-wrap;word-break:break-word;background:#0c0e12;border:1px solid var(--border);
+    border-radius:8px;padding:12px;margin:10px 0 2px;max-height:340px;overflow:auto;font-size:12.5px;line-height:1.5}
+  .log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);
+    background:#0c0e12;border:1px solid var(--border);border-radius:9px;padding:10px 12px;max-height:150px;overflow:auto}
+  .log div{padding:1px 0}
+  .err{color:var(--red)} .ok{color:var(--green)}
+  .toolbar{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
+  a.link{color:var(--blue);text-decoration:none;font-size:12px}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔥 Firecrawl <span style="color:var(--muted);font-weight:400">· Live Scraper</span></h1>
+  <div class="sub">Inserisci un URL, avvia il crawl, segui l'avanzamento e salva tutto come cartella di file Markdown.</div>
+
+  <!-- CONFIG -->
+  <div class="card">
+    <div class="row">
+      <div class="grow">
+        <label>URL da scansionare</label>
+        <input id="url" type="url" placeholder="https://example.com" value="https://example.com">
+      </div>
+      <div>
+        <label>Max pagine</label>
+        <input id="limit" type="number" min="1" value="25">
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div class="grow">
+        <label>API Firecrawl</label>
+        <input id="api" type="text" value="http://localhost:3002">
+      </div>
+      <div>
+        <label>Formato</label>
+        <select id="format">
+          <option value="markdown">markdown</option>
+          <option value="html">html</option>
+        </select>
+      </div>
+    </div>
+    <button id="start" class="btn-go">Avvia scraping ▶</button>
+  </div>
+
+  <!-- STATUS -->
+  <div id="status" class="card hidden">
+    <div class="status-head">
+      <div class="metrics">
+        <div><span>Stato</span><span id="badge" class="badge b-idle">idle</span></div>
+      </div>
+      <div class="metrics">
+        <div><b id="m-done">0</b><span>completate</span></div>
+        <div><b id="m-total">0</b><span>totali</span></div>
+        <div><b id="m-time">0s</b><span>tempo</span></div>
+      </div>
+    </div>
+    <div class="bar"><span id="bar"></span></div>
+    <div class="toolbar">
+      <button id="stop" class="btn-ghost">Ferma polling</button>
+      <button id="saveFolder" class="btn-save hidden">💾 Salva cartella (.md + MAP)</button>
+      <button id="saveZip" class="btn-ghost hidden">🗜 Scarica ZIP</button>
+      <button id="saveMega" class="btn-save hidden">📄 MEGA MD</button>
+      <button id="download" class="btn-ghost hidden">⬇ JSON</button>
+      <a id="crawlid" class="link" style="align-self:center"></a>
+    </div>
+    <div id="savehint" class="hint hidden"></div>
+  </div>
+
+  <!-- LOG -->
+  <div id="logcard" class="card hidden">
+    <label>Log</label>
+    <div id="log" class="log"></div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results" class="card hidden">
+    <label id="reslabel">Pagine raccolte (<span id="count">0</span>)</label>
+    <div id="pages" class="pages"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let timer=null, startTs=0, crawlId=null, apiBase='', allData=[], siteHost='site';
+
+function log(msg,cls){
+  $('logcard').classList.remove('hidden');
+  const d=document.createElement('div');
+  d.textContent='['+new Date().toLocaleTimeString()+'] '+msg;
+  if(cls) d.className=cls;
+  $('log').appendChild(d); $('log').scrollTop=$('log').scrollHeight;
+}
+function setBadge(s){
+  const b=$('badge'); b.textContent=s;
+  b.className='badge '+({scraping:'b-scraping',completed:'b-completed',failed:'b-failed'}[s]||'b-idle');
+}
+function fmtTime(ms){const s=Math.floor(ms/1000);return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s';}
+
+/* ---------- helpers percorso/albero (come lo script Python) ---------- */
+function slug(s){s=(s||'').replace(/[^\w\-.]+/g,'-').replace(/^[-.]+|[-.]+$/g,'');return s||'index';}
+function hostOf(u){try{return new URL(u).hostname||'site';}catch(e){return 'site';}}
+function segmentsFor(src){
+  let path='/',query='';
+  try{const u=new URL(src);path=u.pathname;query=u.search.replace(/^\?/,'');}catch(e){}
+  let segs=path.replace(/^\/+|\/+$/g,'').split('/').filter(Boolean).map(slug);
+  if(segs.length===0) segs=['index'];
+  else if(path.endsWith('/')) segs.push('index');
+  if(query) segs[segs.length-1]+='-'+slug(query);
+  return segs;
+}
+/* costruisce {file:[{rel,title,body,src}...] annidati} e ritorna elenco piatto con rel unici */
+function buildFiles(){
+  const used=new Set(), files=[], tree={};
+  for(const pg of allData){
+    const meta=pg.metadata||{};
+    const src=meta.sourceURL||meta.url||'';
+    const title=(meta.title||meta.ogTitle||src||'(senza titolo)').trim();
+    const body=pg.markdown||pg.html||'';
+    const segs=segmentsFor(src);
+    let rel=segs.join('/')+'.md', base=rel, n=2;
+    while(used.has(rel)){rel=base.slice(0,-3)+'-'+(n++)+'.md';}
+    used.add(rel);
+    const front='---\ntitle: "'+title.replace(/"/g,'\\"')+'"\nsource: '+src+'\n---\n\n';
+    files.push({rel,title,content:front+body,segs});
+    // albero per MAP
+    files[files.length-1].src=src;
+    let node=tree;
+    for(const s of segs.slice(0,-1)) node=node[s]||(node[s]={});
+    (node.__files__||(node.__files__=[])).push([rel,title,src]);
+  }
+  return {files,tree};
+}
+function renderMap(tree,depth){
+  depth=depth||0; const ind='  '.repeat(depth); let out=[];
+  Object.keys(tree).filter(k=>k!=='__files__').sort().forEach(name=>{
+    out.push(ind+'- **'+name+'/**'); out=out.concat(renderMap(tree[name],depth+1));
+  });
+  (tree.__files__||[]).sort().forEach(([rel,title])=>{
+    out.push(ind+'- ['+title+'](<'+rel+'>)');
+  });
+  return out;
+}
+function mapDoc(tree,count){
+  return '# Mappa di '+siteHost+'\n\nPagine: '+count+' · generato il '+
+    new Date().toLocaleString()+'\n\n'+renderMap(tree).join('\n')+'\n';
+}
+
+/* ---------- albero ASCII (stile comando `tree`) per il MEGA MD ---------- */
+function asciiTreeLines(node,prefix){
+  prefix=prefix||'';
+  const dirs=Object.keys(node).filter(k=>k!=='__files__').sort();
+  const files=(node.__files__||[]).slice().sort((a,b)=>a[0].localeCompare(b[0]));
+  const items=[...dirs.map(d=>({dir:1,name:d,node:node[d]})),
+               ...files.map(f=>({dir:0,name:f[0].split('/').pop(),src:f[2]||''}))];
+  let out=[];
+  items.forEach((it,i)=>{
+    const last=i===items.length-1, conn=last?'└── ':'├── ';
+    if(it.dir){
+      out.push({text:prefix+conn+it.name+'/',comment:''});
+      out=out.concat(asciiTreeLines(it.node,prefix+(last?'    ':'│   ')));
+    }else{
+      let path=''; try{path=new URL(it.src).pathname||'/';}catch(e){}
+      out.push({text:prefix+conn+it.name, comment: path?('← '+path):''});
+    }
+  });
+  return out;
+}
+function asciiTree(tree){
+  const lines=[{text:siteHost+'/',comment:''}].concat(asciiTreeLines(tree));
+  const maxLen=Math.max(...lines.map(l=>l.text.length));
+  return lines.map(l=> l.comment
+    ? l.text+' '.repeat(maxLen-l.text.length+4)+l.comment
+    : l.text).join('\n');
+}
+/* ---------- MEGA MD: un unico file con tutte le pagine ---------- */
+function megaDoc(){
+  const {files,tree}=buildFiles();
+  let out='# '+siteHost+' — MEGA MD\n\n';
+  out+='Pagine: '+files.length+' · sorgente: '+siteHost+' · generato il '+
+       new Date().toLocaleString()+'\n\n';
+  out+='## Struttura\n\n```\n'+asciiTree(tree)+'\n```\n\n';
+  out+='---\n\n';
+  for(const pg of allData){
+    const meta=pg.metadata||{};
+    const title=(meta.title||meta.ogTitle||'(senza titolo)').trim();
+    const url=meta.sourceURL||meta.url||'';
+    const md=pg.markdown||pg.html||'';
+    out+='TITLE: '+title+'\nURL: '+url+'\nMARKDOWN:\n\n'+md+'\n\n---\n\n';
+  }
+  return out;
+}
+function saveMega(){
+  if(!allData.length){log('Nessuna pagina da esportare.','err');return;}
+  const blob=new Blob([megaDoc()],{type:'text/markdown'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=siteHost+'-MEGA.md'; a.click();
+  log('MEGA MD generato: '+siteHost+'-MEGA.md ('+allData.length+' pagine).','ok');
+}
+
+/* ---------- salvataggio in cartella reale (File System Access API) ---------- */
+async function saveToFolder(){
+  if(!window.showDirectoryPicker){log('Il browser non supporta la scrittura su cartella: uso lo ZIP.','err');return saveAsZip();}
+  let dir;
+  try{dir=await window.showDirectoryPicker();}catch(e){return;} // annullato
+  const {files,tree}=buildFiles();
+  const root=await dir.getDirectoryHandle(siteHost,{create:true});
+  let ok=0;
+  for(const f of files){
+    let d=root;
+    for(const s of f.segs.slice(0,-1)) d=await d.getDirectoryHandle(s,{create:true});
+    const fh=await d.getFileHandle(f.segs[f.segs.length-1]+'.md',{create:true});
+    const w=await fh.createWritable(); await w.write(f.content); await w.close(); ok++;
+  }
+  const mh=await root.getFileHandle('MAP.md',{create:true});
+  const mw=await mh.createWritable(); await mw.write(mapDoc(tree,files.length)); await mw.close();
+  log('Salvati '+ok+' file .md + MAP.md nella cartella "'+siteHost+'/".','ok');
+  $('savehint').classList.remove('hidden');
+  $('savehint').textContent='✓ Scritto in '+siteHost+'/ dentro la cartella che hai scelto.';
+}
+
+/* ---------- fallback: ZIP store-only, senza librerie ---------- */
+const _crc=(()=>{let t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=_crc[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function saveAsZip(){
+  const {files,tree}=buildFiles();
+  const enc=new TextEncoder();
+  const entries=files.map(f=>({name:siteHost+'/'+f.rel,data:enc.encode(f.content)}));
+  entries.push({name:siteHost+'/MAP.md',data:enc.encode(mapDoc(tree,files.length))});
+  const chunks=[]; const central=[]; let offset=0;
+  const u16=n=>[n&255,(n>>8)&255], u32=n=>[n&255,(n>>8)&255,(n>>16)&255,(n>>24)&255];
+  for(const e of entries){
+    const nameB=enc.encode(e.name), crc=crc32(e.data), sz=e.data.length;
+    const local=[].concat(u32(0x04034b50),u16(20),u16(0),u16(0),u16(0),u16(0),
+      u32(crc),u32(sz),u32(sz),u16(nameB.length),u16(0));
+    chunks.push(new Uint8Array(local),nameB,e.data);
+    central.push({crc,sz,nameB,offset});
+    offset+=local.length+nameB.length+sz;
+  }
+  const cd=[]; let cdSize=0;
+  for(const c of central){
+    const h=[].concat(u32(0x02014b50),u16(20),u16(20),u16(0),u16(0),u16(0),u16(0),
+      u32(c.crc),u32(c.sz),u32(c.sz),u16(c.nameB.length),u16(0),u16(0),u16(0),u16(0),
+      u32(0),u32(c.offset));
+    const arr=new Uint8Array(h.length+c.nameB.length); arr.set(h,0); arr.set(c.nameB,h.length);
+    cd.push(arr); cdSize+=arr.length;
+  }
+  const eocd=new Uint8Array([].concat(u32(0x06054b50),u16(0),u16(0),
+    u16(entries.length),u16(entries.length),u32(cdSize),u32(offset),u16(0)));
+  const blob=new Blob([...chunks,...cd,eocd],{type:'application/zip'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=siteHost+'.zip'; a.click();
+  log('ZIP generato: '+siteHost+'.zip ('+entries.length+' file).','ok');
+}
+
+/* ---------- rendering pagine ---------- */
+function renderPages(data){
+  const box=$('pages');
+  for(let i=box.childElementCount;i<data.length;i++){
+    const p=data[i]||{}; const meta=p.metadata||{};
+    const el=document.createElement('details'); el.className='page';
+    el.innerHTML='<summary><span class="t"></span><span class="u"></span></summary><pre></pre>';
+    el.querySelector('.t').textContent=meta.title||meta.ogTitle||'(senza titolo)';
+    el.querySelector('.u').textContent=meta.sourceURL||meta.url||'';
+    el.querySelector('pre').textContent=p.markdown||p.html||'(vuoto)';
+    box.appendChild(el);
+  }
+  $('count').textContent=data.length;
+  const lbl=$('reslabel');
+  if(lbl) lbl.innerHTML = (timer
+    ? 'Anteprima pagine · mostrate <span id="count">'+data.length+'</span> (i totali reali sono in alto)'
+    : 'Pagine raccolte (<span id="count">'+data.length+'</span>)');
+  $('results').classList.toggle('hidden',data.length===0);
+}
+
+async function fetchAll(firstJson){
+  let data=(firstJson.data||[]).slice(); let next=firstJson.next,guard=0;
+  while(next && guard++<200){
+    try{
+      const u=next.startsWith('http')?next.replace(/^https?:\/\/[^/]+/,apiBase):apiBase+next;
+      const r=await fetch(u); const j=await r.json();
+      if(Array.isArray(j.data)) data=data.concat(j.data); next=j.next;
+    }catch(e){break;}
+  }
+  return data;
+}
+
+async function poll(){
+  try{
+    const r=await fetch(apiBase+'/v1/crawl/'+crawlId);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const status=j.status||'scraping';
+    setBadge(status);
+    $('m-done').textContent=j.completed??0;
+    $('m-total').textContent=j.total??0;
+    $('m-time').textContent=fmtTime(Date.now()-startTs);
+    const pct=j.total?Math.min(100,Math.round((j.completed/j.total)*100)):5;
+    $('bar').style.width=pct+'%';
+    renderPages(j.data||[]);
+    if(status==='completed'||status==='failed'){
+      clearInterval(timer); timer=null;
+      $('start').disabled=false; $('start').textContent='Avvia scraping ▶';
+      log('Crawl '+status+' · '+(j.completed??0)+' pagine');
+      if(status==='completed'){
+        log('Recupero eventuali pagine paginate…');
+        allData=await fetchAll(j); renderPages(allData); $('bar').style.width='100%';
+        $('saveFolder').classList.remove('hidden');
+        $('saveZip').classList.remove('hidden');
+        $('saveMega').classList.remove('hidden');
+        $('download').classList.remove('hidden');
+        if(!window.showDirectoryPicker){
+          $('savehint').classList.remove('hidden');
+          $('savehint').textContent='ℹ Questo browser non supporta la scrittura diretta su cartella: usa "Scarica ZIP".';
+        }
+      }
+    }
+  }catch(e){ log('Errore polling: '+e.message,'err'); }
+}
+
+async function start(){
+  const url=$('url').value.trim();
+  apiBase=$('api').value.trim().replace(/\/$/,'');
+  if(!url){log('Inserisci un URL','err');return;}
+  siteHost=hostOf(url);
+  const limit=parseInt($('limit').value)||25, format=$('format').value;
+
+  $('start').disabled=true; $('start').textContent='Avvio…';
+  $('status').classList.remove('hidden');
+  $('pages').innerHTML=''; $('results').classList.add('hidden');
+  ['saveFolder','saveZip','saveMega','download','savehint'].forEach(id=>$(id).classList.add('hidden'));
+  setBadge('scraping'); $('bar').style.width='3%';
+  $('m-done').textContent='0'; $('m-total').textContent='0'; allData=[];
+
+  try{
+    log('POST /v1/crawl → '+url+' (limit '+limit+')');
+    const r=await fetch(apiBase+'/v1/crawl',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url,limit,scrapeOptions:{formats:[format]}})
+    });
+    const j=await r.json();
+    if(!r.ok||!j.id) throw new Error(j.error||JSON.stringify(j));
+    crawlId=j.id; startTs=Date.now();
+    $('crawlid').textContent='id: '+crawlId;
+    $('crawlid').href=apiBase+'/v1/crawl/'+crawlId; $('crawlid').target='_blank';
+    log('Crawl avviato · id '+crawlId);
+    poll(); timer=setInterval(poll,2000);
+  }catch(e){
+    log('Avvio fallito: '+e.message,'err'); setBadge('failed');
+    $('start').disabled=false; $('start').textContent='Avvia scraping ▶';
+  }
+}
+function stop(){ if(timer){clearInterval(timer);timer=null;log('Polling fermato.');}
+  $('start').disabled=false; $('start').textContent='Avvia scraping ▶'; }
+function downloadJson(){
+  const blob=new Blob([JSON.stringify(allData,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=siteHost+'-'+(crawlId||'result')+'.json'; a.click();
+}
+
+$('start').addEventListener('click',start);
+$('stop').addEventListener('click',stop);
+$('saveFolder').addEventListener('click',saveToFolder);
+$('saveZip').addEventListener('click',saveAsZip);
+$('saveMega').addEventListener('click',saveMega);
+$('download').addEventListener('click',downloadJson);
+$('url').addEventListener('keydown',e=>{if(e.key==='Enter')start();});
+</script>
+</body>
+</html>

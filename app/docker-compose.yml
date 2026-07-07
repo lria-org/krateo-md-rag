@@ -1,0 +1,146 @@
+name: firecrawl
+
+# Self-hosted Firecrawl con immagini prebuilt (nessun sorgente da compilare).
+# Servizi: api + worker (harness), playwright, redis, rabbitmq, nuq-postgres.
+
+x-common-service: &common-service
+  image: ghcr.io/firecrawl/firecrawl:latest
+  ulimits:
+    nofile: { soft: 65535, hard: 65535 }
+  networks: [backend]
+  extra_hosts:
+    # permette ai container di raggiungere Ollama in esecuzione sul Mac host
+    - "host.docker.internal:host-gateway"
+  logging:
+    driver: "json-file"
+    options: { max-size: "10m", max-file: "3", compress: "true" }
+
+x-common-env: &common-env
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  REDIS_RATE_LIMIT_URL: ${REDIS_URL:-redis://redis:6379}
+  PLAYWRIGHT_MICROSERVICE_URL: ${PLAYWRIGHT_MICROSERVICE_URL:-http://playwright-service:3000/scrape}
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+  POSTGRES_DB: ${POSTGRES_DB:-postgres}
+  POSTGRES_HOST: ${POSTGRES_HOST:-nuq-postgres}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  USE_DB_AUTHENTICATION: ${USE_DB_AUTHENTICATION:-false}
+  NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
+  CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
+  MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
+  BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+  MODEL_NAME: ${MODEL_NAME}
+  MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+  AUTUMN_SECRET_KEY: ${AUTUMN_SECRET_KEY}
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+  BULL_AUTH_KEY: ${BULL_AUTH_KEY:-CHANGEME}
+  SELF_HOSTED_WEBHOOK_URL: ${SELF_HOSTED_WEBHOOK_URL}
+  LOGGING_LEVEL: ${LOGGING_LEVEL:-info}
+  PROXY_SERVER: ${PROXY_SERVER}
+  PROXY_USERNAME: ${PROXY_USERNAME}
+  PROXY_PASSWORD: ${PROXY_PASSWORD}
+  ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS:-false}
+  BLOCK_MEDIA: ${BLOCK_MEDIA:-false}
+
+services:
+  playwright-service:
+    image: ghcr.io/firecrawl/playwright-service:latest
+    environment:
+      PORT: 3000
+      PROXY_SERVER: ${PROXY_SERVER}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      BLOCK_MEDIA: ${BLOCK_MEDIA:-false}
+      MAX_CONCURRENT_PAGES: ${CRAWL_CONCURRENT_REQUESTS:-10}
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      # l'immagine non ha curl: uso node, sempre presente
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  api:
+    <<: *common-service
+    environment:
+      <<: *common-env
+      HOST: "0.0.0.0"
+      PORT: ${INTERNAL_PORT:-3002}
+      EXTRACT_WORKER_PORT: ${EXTRACT_WORKER_PORT:-3004}
+      WORKER_PORT: ${WORKER_PORT:-3005}
+      NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
+      HARNESS_STARTUP_TIMEOUT_MS: ${HARNESS_STARTUP_TIMEOUT_MS:-60000}
+      ENV: local
+    depends_on:
+      redis: { condition: service_started }
+      playwright-service: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      nuq-postgres: { condition: service_healthy }
+    ports:
+      - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
+    command: node dist/src/harness.js --start-docker
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    networks: [backend]
+    command: redis-server --bind 0.0.0.0 --maxmemory 2gb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - redis-data:/data
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    networks: [backend]
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    command: rabbitmq-server
+    restart: unless-stopped
+    ports:
+      - "15672:15672"   # management UI (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
+  nuq-postgres:
+    image: ghcr.io/firecrawl/nuq-postgres:latest
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # DEVE essere 'postgres': pg_cron (usato dallo schema nuq) si installa solo
+      # nel db indicato da cron.database_name, fissato a 'postgres' nell'immagine.
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:
