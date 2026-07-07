@@ -1,15 +1,8 @@
-# 
----
-# Default values for fireworks-app.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-
 replicaCount: 1
 
 image:
   repository: ghcr.io/lria-org/krateo-md-rag
   pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
   tag: latest
 
 imagePullSecrets: []
@@ -17,68 +10,78 @@ nameOverride: ""
 fullnameOverride: ""
 
 serviceAccount:
-  # Specifies whether a service account should be created
   create: true
-  # Annotations to add to the service account
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
   name: ""
 
 podAnnotations: {}
-
 podSecurityContext: {}
-  # fsGroup: 2000
-
 securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
 
+# Configurazione del Servizio per Kubernetes
 service:
   type: NodePort
-  port: 31180
-  
+  port: 3002          # Porta interna su cui risponde Firecrawl
+  nodePort: 31180     # Porta esterna esposta sul tuo localhost
+
 ingress:
   enabled: false
   className: ""
   annotations: {}
-    # kubernetes.io/ingress.class: nginx
-    # kubernetes.io/tls-acme: "true"
   hosts:
     - host: chart-example.local
       paths:
         - path: /
           pathType: ImplementationSpecific
   tls: []
-  #  - secretName: chart-example-tls
-  #    hosts:
-  #      - chart-example.local
+
+# --- VARIABILI D'AMBIENTE (Traslocate dal tuo Docker Compose) ---
+env:
+  HOST: "0.0.0.0"
+  PORT: "3002"
+  ENV: "local"
+  REDIS_URL: "redis://localhost:6379"
+  REDIS_RATE_LIMIT_URL: "redis://localhost:6379"
+  PLAYWRIGHT_MICROSERVICE_URL: "http://localhost:3000/scrape"
+  POSTGRES_HOST: "localhost"
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: "postgres"
+  POSTGRES_PASSWORD: "postgres"
+  POSTGRES_DB: "postgres"
+  USE_DB_AUTHENTICATION: "false"
+  NUM_WORKERS_PER_QUEUE: "8"
+  CRAWL_CONCURRENT_REQUESTS: "10"
+  MAX_CONCURRENT_JOBS: "5"
+  BROWSER_POOL_SIZE: "5"
+  LOGGING_LEVEL: "info"
+  BULL_AUTH_KEY: "CHANGEME"
+  ALLOW_LOCAL_WEBHOOKS: "false"
+  BLOCK_MEDIA: "false"
+  EXTRACT_WORKER_PORT: "3004"
+  WORKER_PORT: "3005"
+  NUQ_RABBITMQ_URL: "amqp://localhost:5672"
+  HARNESS_STARTUP_TIMEOUT_MS: "60000"
+  # Inserisci qui i tuoi token se li usi:
+  OPENAI_API_KEY: ""
+  OPENAI_BASE_URL: ""
+  MODEL_NAME: ""
+  MODEL_EMBEDDING_NAME: ""
+  OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+
+# --- IMMAGINI DEI CONTAINER DI SUPPORTO (Sidecars) ---
+sidecars:
+  playwright:
+    image: ghcr.io/firecrawl/playwright-service:latest
+  redis:
+    image: redis:7-alpine
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+  postgres:
+    image: ghcr.io/firecrawl/nuq-postgres:latest
 
 resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
-
 autoscaling:
   enabled: false
-  minReplicas: 1
-  maxReplicas: 100
-  targetCPUUtilizationPercentage: 80
-  # targetMemoryUtilizationPercentage: 80
-
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}

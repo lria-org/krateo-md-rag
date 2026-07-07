@@ -28,14 +28,16 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
+        # 1. CONTAINER PRINCIPALE: Firecrawl API
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "dist/src/harness.js", "--start-docker"]
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 3002
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -45,8 +47,70 @@ spec:
             httpGet:
               path: /
               port: http
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+
+        # 2. SIDECAR: Playwright Service
+        - name: playwright-service
+          image: "{{ .Values.sidecars.playwright.image }}"
+          ports:
+            - name: playwright
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3000"
+            - name: MAX_CONCURRENT_PAGES
+              value: "10"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+        # 3. SIDECAR: Redis Server
+        - name: redis
+          image: "{{ .Values.sidecars.redis.image }}"
+          command: ["redis-server", "--bind", "0.0.0.0", "--maxmemory", "2gb", "--maxmemory-policy", "allkeys-lru"]
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+
+        # 4. SIDECAR: RabbitMQ Message Broker
+        - name: rabbitmq
+          image: "{{ .Values.sidecars.rabbitmq.image }}"
+          ports:
+            - name: amqp
+              containerPort: 5672
+              protocol: TCP
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: "guest"
+            - name: RABBITMQ_DEFAULT_PASS
+              value: "guest"
+
+        # 5. SIDECAR: Nuq-Postgres Database
+        - name: nuq-postgres
+          image: "{{ .Values.sidecars.postgres.image }}"
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              value: "postgres"
+            - name: POSTGRES_DB
+              value: "postgres"
+
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

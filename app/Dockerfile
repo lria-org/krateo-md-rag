@@ -1,3 +1,5 @@
+FROM ghcr.io/firecrawl/firecrawl:latest
+
 FROM bitnami/nginx
 LABEL maintainer "Krateo <contact@krateoplatformops.io>"
 
