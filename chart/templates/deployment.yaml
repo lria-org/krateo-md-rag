@@ -28,13 +28,29 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        # 1. CONTAINER PRINCIPALE: Firecrawl API
+        # 1. CONTAINER PRINCIPALE: Firecrawl API (Con controllo porte nativo via Node)
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["node", "dist/src/harness.js", "--start-docker"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "==> [STARTUP] Controllo disponibilità di RabbitMQ (porta 5672)..."
+              until node -e "const net = require('net'); const c = net.connect({port: 5672, host: 'localhost'}, () => process.exit(0)); c.on('error', () => process.exit(1));" 2>/dev/null; do
+                echo "==> [STARTUP] RabbitMQ non è ancora pronto. Ricontrollo tra 2 secondi..."
+                sleep 2
+              done
+              
+              echo "==> [STARTUP] Controllo disponibilità di Postgres (porta 5432)..."
+              until node -e "const net = require('net'); const c = net.connect({port: 5432, host: 'localhost'}, () => process.exit(0)); c.on('error', () => process.exit(1));" 2>/dev/null; do
+                echo "==> [STARTUP] Postgres non è ancora pronto. Ricontrollo tra 2 secondi..."
+                sleep 2
+              done
+
+              echo "==> [STARTUP] Tutti i servizi backend sono ONLINE! Avvio Firecrawl..."
+              node dist/src/harness.js --start-docker      # <--- CAMBIA DA --start-built A --start-docker
           ports:
             - name: http
               containerPort: 3002
@@ -43,10 +59,14 @@ spec:
             httpGet:
               path: /
               port: http
+            initialDelaySeconds: 45
+            periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /
               port: http
+            initialDelaySeconds: 45
+            periodSeconds: 10
           env:
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}

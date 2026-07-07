@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/lria-org/krateo-md-rag
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   tag: latest
 
 imagePullSecrets: []
@@ -21,7 +21,7 @@ securityContext: {}
 # Configurazione del Servizio per Kubernetes
 service:
   type: NodePort
-  port: 3002          # Porta interna su cui risponde Firecrawl
+  port: 31180          # Porta interna su cui risponde Firecrawl
   nodePort: 31180     # Porta esterna esposta sul tuo localhost
 
 ingress:
@@ -40,6 +40,7 @@ env:
   HOST: "0.0.0.0"
   PORT: "3002"
   ENV: "local"
+  NUQ_DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
   REDIS_URL: "redis://localhost:6379"
   REDIS_RATE_LIMIT_URL: "redis://localhost:6379"
   PLAYWRIGHT_MICROSERVICE_URL: "http://localhost:3000/scrape"
