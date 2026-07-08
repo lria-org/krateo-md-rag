@@ -18,24 +18,24 @@ podAnnotations: {}
 podSecurityContext: {}
 securityContext: {}
 
-# Configurazione del Servizio per Kubernetes
+# Configurazione del Servizio per Kubernetes (Reindirizza su Nginx porta 8080)
 service:
   type: NodePort
-  port: 31180          # Porta interna su cui risponde Firecrawl
-  nodePort: 31180     # Porta esterna esposta sul tuo localhost
+  port: 31181            # Porta del Servizio richiesta
+  nodePort: 31181        # Espone direttamente sul localhost del tuo Mac alla porta 8181
 
 ingress:
-  enabled: false
-  className: ""
+  enabled: true
+  className: "nginx"
   annotations: {}
   hosts:
-    - host: chart-example.local
+    - host: krateo.local
       paths:
         - path: /
           pathType: ImplementationSpecific
   tls: []
 
-# --- VARIABILI D'AMBIENTE (Traslocate dal tuo Docker Compose) ---
+# --- VARIABILI D'AMBIENTE ---
 env:
   HOST: "0.0.0.0"
   PORT: "3002"
@@ -62,14 +62,13 @@ env:
   WORKER_PORT: "3005"
   NUQ_RABBITMQ_URL: "amqp://localhost:5672"
   HARNESS_STARTUP_TIMEOUT_MS: "60000"
-  # Inserisci qui i tuoi token se li usi:
   OPENAI_API_KEY: ""
   OPENAI_BASE_URL: ""
   MODEL_NAME: ""
   MODEL_EMBEDDING_NAME: ""
   OLLAMA_BASE_URL: "http://host.docker.internal:11434"
 
-# --- IMMAGINI DEI CONTAINER DI SUPPORTO (Sidecars) ---
+# --- IMMAGINI DEI CONTAINER DI SUPPORTO ---
 sidecars:
   playwright:
     image: ghcr.io/firecrawl/playwright-service:latest
@@ -78,7 +77,30 @@ sidecars:
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
   postgres:
-    image: ghcr.io/firecrawl/nuq-postgres:latest
+    image: ghcr.io/lria-org/krateo-nuq-postgres:latest   # nuq-postgres + pgvector (build in CI)
+  agentCore:
+    image: ghcr.io/lria-org/krateo-agent-core:latest
+
+# --- CONFIG AGENT-CORE (7° container) ---
+agentCore:
+  enabled: true
+  port: 8000
+  pullPolicy: IfNotPresent   # locale/kind: usa l'immagine caricata con 'kind load'; in prod ArgoCD la pulla dal registry
+  env:
+    EMBED_PROVIDER: "ollama"
+    OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+    MODEL_NAME: "gemma2:9b"
+    MODEL_EMBEDDING_NAME: "nomic-embed-text"
+    EMBED_DIM: "768"
+    AGENT_DB_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
+
+# --- RBAC per lettura log Kubernetes ---
+rbac:
+  create: true
+  # ClusterRole = accesso pods/log su tutti i namespace del cluster
+  logNamespaces:
+    - krateo-system
+    - krateo-demo
 
 resources: {}
 autoscaling:

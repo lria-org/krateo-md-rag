@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fireworks-app.fullname" . }}-nginx-config
+  labels:
+    {{- include "fireworks-app.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name localhost krateo.local;
+
+        # Frontend: Serviamo la pagina statica HTML
+        location / {
+            root /usr/share/nginx/html;
+            index index.html;
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Backend API Proxy per Firecrawl
+        location /v1/ {
+            proxy_pass http://localhost:3002;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        # Backend API Proxy per Agent-Core (RAG + RCA)
+        location /api/agent/ {
+            proxy_pass http://localhost:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            # upload MD + analyze LLM = risposte lente
+            client_max_body_size 25m;
+            proxy_read_timeout 300s;
+        }
+    }

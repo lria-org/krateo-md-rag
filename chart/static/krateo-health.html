@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🩺 Krateo Health · Pod & Agente RCA</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181b22; --card2:#1f232c; --border:#2a2f3a;
+    --text:#e6e8ec; --muted:#9aa3b2; --accent:#6a5bff; --accent2:#20b0ff;
+    --green:#3fb950; --red:#f85149; --amber:#d29922; --blue:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 70% -10%,#0b0f20 0%,var(--bg) 55%);color:var(--text);min-height:100vh}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 20px 60px}
+  h1{font-size:22px;margin:0 0 2px;display:flex;align-items:center;gap:10px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  a.navlink{color:var(--accent2);font-size:13px;text-decoration:none}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px}
+  h2{font-size:15px;margin:0 0 14px}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px;text-transform:uppercase;letter-spacing:.04em}
+  input,select{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);
+    padding:11px 12px;border-radius:9px;font-size:14px;outline:none;font-family:inherit}
+  input:focus,select:focus{border-color:var(--accent)}
+  button{cursor:pointer;border:none;border-radius:9px;font-size:14px;font-weight:600;padding:11px 18px;transition:.15s}
+  .btn-go{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+  .btn-go:hover{filter:brightness(1.08)} .btn-go:disabled{opacity:.5;cursor:not-allowed}
+  .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+  .btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+  .btn-sm{padding:7px 12px;font-size:13px}
+  .hidden{display:none}
+  .topbar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px}
+  .topbar>div{flex:1;min-width:180px}
+  .filters{display:flex;gap:16px;align-items:center;color:var(--muted);font-size:13px;margin-top:4px}
+  .filters label{display:inline-flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;cursor:pointer}
+  .filters input{width:auto}
+  /* griglia pod */
+  .pods{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:6px}
+  .pod{background:var(--card2);border:1px solid var(--border);border-left:4px solid var(--green);
+    border-radius:10px;padding:12px 14px;cursor:pointer;transition:.12s}
+  .pod:hover{border-color:var(--muted)}
+  .pod.err{border-left-color:var(--red)}
+  .pod.sel{outline:2px solid var(--accent)}
+  .pod .pname{font-weight:600;font-size:14px;word-break:break-all}
+  .pod .pmeta{color:var(--muted);font-size:12px;margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--green)}
+  .dot.err{background:var(--red)}
+  .chip{display:inline-block;background:rgba(248,81,73,.15);color:var(--red);font-size:11px;font-weight:700;
+    padding:2px 8px;border-radius:20px;margin-top:6px}
+  .chip.ok{background:rgba(63,185,80,.15);color:var(--green)}
+  /* pannello log */
+  .loghead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .brain{font-size:22px;background:rgba(106,91,255,.15);border:1px solid rgba(106,91,255,.5);
+    border-radius:10px;padding:8px 12px;line-height:1;color:#fff}
+  .brain:hover{background:rgba(106,91,255,.3)}
+  .out{white-space:pre-wrap;word-break:break-word;background:#0c0e12;border:1px solid var(--border);
+    border-radius:9px;padding:14px;font-size:13px;line-height:1.55;max-height:420px;overflow:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .report{white-space:pre-wrap;word-break:break-word;background:#0c0e12;border:1px solid rgba(106,91,255,.35);
+    border-radius:9px;padding:16px;font-size:13.5px;line-height:1.6;max-height:520px;overflow:auto}
+  .report b{color:var(--accent2)}
+  .msg{font-size:13px;margin-top:8px} .err{color:var(--red)} .ok{color:var(--green)} .muted{color:var(--muted)}
+  details.bundle{margin-top:12px} details.bundle summary{cursor:pointer;color:var(--muted);font-size:13px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);
+    border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🩺 Krateo Health <span style="font-size:13px;color:var(--muted)">Pod · Log · Agente RCA</span></h1>
+  <div class="sub">Diagnostica cluster ·
+    <a class="navlink" href="/krateo-health.html">Health</a> ·
+    <a class="navlink" href="/agent.html">🤖 Agent RAG</a> ·
+    <a class="navlink" href="/index.html">🔥 Scraper</a>
+  </div>
+
+  <!-- CONTROLLI -->
+  <div class="card">
+    <div class="topbar">
+      <div>
+        <label>Namespace (separati da virgola)</label>
+        <input id="ns" value="krateo-system,krateo-demo">
+      </div>
+      <div>
+        <label>KB RAG (progetto, opzionale)</label>
+        <select id="projSelect"><option value="">— tutta la KB —</option></select>
+      </div>
+      <div style="flex:0 0 auto">
+        <label>&nbsp;</label>
+        <button class="btn-go" id="btnScan">🔄 Scansiona pod</button>
+      </div>
+    </div>
+    <div class="filters">
+      <label><input type="checkbox" id="onlyErr"> Solo pod con errori</label>
+      <span id="summary" class="muted"></span>
+    </div>
+  </div>
+
+  <!-- LISTA POD -->
+  <div class="card hidden" id="podsCard">
+    <h2>Pod</h2>
+    <div class="pods" id="pods"></div>
+  </div>
+
+  <!-- LOG + AGENTE -->
+  <div class="card hidden" id="logCard">
+    <div class="loghead">
+      <div>
+        <h2 style="margin:0" id="logTitle">Log</h2>
+        <div class="msg muted" id="logSub"></div>
+      </div>
+      <button class="brain" id="btnBrain" title="Analizza con l'agente (RCA)">🧠</button>
+    </div>
+    <div class="out" id="logOut"></div>
+    <div class="msg" id="analyzeMsg"></div>
+    <div class="report hidden" id="report" style="margin-top:12px"></div>
+    <details class="bundle hidden" id="bundleWrap">
+      <summary>Dati grezzi raccolti dall'agente (describe + eventi + log)</summary>
+      <div class="out" id="bundleOut" style="margin-top:10px"></div>
+    </details>
+  </div>
+</div>
+
+<script>
+const API = "/api/agent";
+const $ = s => document.querySelector(s);
+let pods = [];
+let sel = null;            // pod selezionato {name,namespace}
+let currentProject = "";   // RAG KB opzionale
+
+async function jf(url, opts){ const r = await fetch(url, opts); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+// render minimale e SICURO del report (escape + **grassetto** + a capo)
+function mdSafe(s){ return esc(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>"); }
+
+async function scan(){
+  const ns = $("#ns").value.trim();
+  $("#btnScan").disabled = true; $("#summary").textContent = "scansione...";
+  try{
+    const r = await jf(`${API}/k8s/pods?namespaces=${encodeURIComponent(ns)}`);
+    pods = r.pods || [];
+    render();
+  }catch(e){ $("#summary").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  finally{ $("#btnScan").disabled = false; }
+}
+
+function render(){
+  const onlyErr = $("#onlyErr").checked;
+  const list = onlyErr ? pods.filter(p=>p.has_error) : pods;
+  const errN = pods.filter(p=>p.has_error).length;
+  $("#summary").innerHTML = `${pods.length} pod · <span class="${errN?'err':'ok'}">${errN} con errori</span>`;
+  $("#podsCard").classList.remove("hidden");
+  const box = $("#pods"); box.innerHTML = "";
+  if(!list.length){ box.innerHTML = '<div class="muted">Nessun pod da mostrare.</div>'; return; }
+  for(const p of list){
+    const el = document.createElement("div");
+    el.className = "pod" + (p.has_error ? " err" : "");
+    if(sel && sel.name===p.name && sel.namespace===p.namespace) el.classList.add("sel");
+    const reasons = (p.reasons||[]).length ? `<div class="chip">${esc(p.reasons.join(", "))}</div>` : "";
+    el.innerHTML =
+      `<div class="pname"><span class="dot ${p.has_error?'err':''}"></span> ${esc(p.name)}</div>`+
+      `<div class="pmeta"><span>${esc(p.namespace)}</span><span>${esc(p.phase)}</span>`+
+      `<span>ready ${esc(p.ready)}</span><span>restart ${p.restarts}</span></div>`+
+      reasons;
+    el.onclick = () => openLog(p);
+    box.appendChild(el);
+  }
+}
+
+async function openLog(p){
+  sel = {name:p.name, namespace:p.namespace};
+  render();
+  $("#logCard").classList.remove("hidden");
+  $("#logTitle").textContent = `Log · ${p.name}`;
+  $("#logSub").textContent = `${p.namespace} · ${p.phase} · ready ${p.ready} · restart ${p.restarts}`;
+  $("#logOut").textContent = "caricamento log...";
+  $("#report").classList.add("hidden"); $("#analyzeMsg").textContent = "";
+  $("#bundleWrap").classList.add("hidden");
+  $("#logCard").scrollIntoView({behavior:"smooth", block:"start"});
+  try{
+    const r = await jf(`${API}/k8s/pods/${encodeURIComponent(p.namespace)}/${encodeURIComponent(p.name)}/log`);
+    $("#logOut").textContent = r.log || "(log vuoto)";
+  }catch(e){ $("#logOut").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+$("#btnBrain").onclick = async () => {
+  if(!sel){ return; }
+  $("#analyzeMsg").innerHTML = '<span class="spin"></span>Agente al lavoro: raccolgo describe + eventi + log, confronto con la RAG...';
+  $("#report").classList.add("hidden");
+  try{
+    const body = {name:sel.name, namespace:sel.namespace};
+    if(currentProject) body.project_id = Number(currentProject);
+    const r = await jf(`${API}/k8s/analyze`, {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)});
+    $("#analyzeMsg").textContent = "";
+    $("#report").innerHTML = mdSafe(r.report || "(nessun report)");
+    $("#report").classList.remove("hidden");
+    if(r.bundle){
+      $("#bundleOut").textContent =
+        `### DESCRIBE\n${r.bundle.describe}\n\n### EVENTI\n${r.bundle.events}\n\n### LOG\n${r.bundle.log}`;
+      $("#bundleWrap").classList.remove("hidden");
+    }
+  }catch(e){ $("#analyzeMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+};
+
+async function loadProjects(){
+  try{
+    const list = await jf(`${API}/projects`);
+    $("#projSelect").innerHTML = '<option value="">— tutta la KB —</option>' +
+      list.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  }catch(e){ /* KB non disponibile: si usa comunque la RAG globale */ }
+}
+
+$("#btnScan").onclick = scan;
+$("#onlyErr").onchange = render;
+$("#projSelect").onchange = e => currentProject = e.target.value;
+$("#ns").addEventListener("keydown", e => { if(e.key==="Enter") scan(); });
+
+loadProjects();
+scan();
+</script>
+</body>
+</html>

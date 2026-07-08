@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🤖 Krateo Agent · RAG & RCA</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181b22; --card2:#1f232c; --border:#2a2f3a;
+    --text:#e6e8ec; --muted:#9aa3b2; --accent:#6a5bff; --accent2:#20b0ff;
+    --green:#3fb950; --red:#f85149; --blue:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 70% -10%,#0b0f20 0%,var(--bg) 55%);color:var(--text);min-height:100vh}
+  .wrap{max-width:960px;margin:0 auto;padding:24px 20px 60px}
+  h1{font-size:22px;margin:0 0 2px;display:flex;align-items:center;gap:10px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px}
+  h2{font-size:15px;margin:0 0 14px}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px;text-transform:uppercase;letter-spacing:.04em}
+  input,select,textarea{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);
+    padding:11px 12px;border-radius:9px;font-size:14px;outline:none;font-family:inherit}
+  input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+  .row>div{flex:1;min-width:120px}
+  button{cursor:pointer;border:none;border-radius:9px;font-size:14px;font-weight:600;padding:11px 18px;transition:.15s}
+  .btn-go{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+  .btn-go:hover{filter:brightness(1.08)} .btn-go:disabled{opacity:.5;cursor:not-allowed}
+  .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+  .btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+  .btn-sm{padding:7px 12px;font-size:13px}
+  .hidden{display:none}
+  .topbar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px}
+  .topbar>div{flex:1;min-width:200px}
+  .pod-row{display:flex;gap:10px;margin-bottom:8px}
+  .pod-row input{flex:1}
+  .out{white-space:pre-wrap;word-break:break-word;background:#0c0e12;border:1px solid var(--border);
+    border-radius:9px;padding:14px;font-size:13px;line-height:1.55;max-height:520px;overflow:auto}
+  .msg{font-size:13px;margin-top:8px} .err{color:var(--red)} .ok{color:var(--green)}
+  a.navlink{color:var(--accent2);font-size:13px;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🤖 Krateo Agent <span style="font-size:13px;color:var(--muted)">RAG · Log Analysis · RCA</span></h1>
+  <div class="sub">Multi-progetto ·
+    <a class="navlink" href="/krateo-health.html">🩺 Krateo Health</a> ·
+    <a class="navlink" href="/index.html">↩ Scraper Firecrawl</a></div>
+
+  <!-- SELETTORE PROGETTO IN ALTO -->
+  <div class="topbar">
+    <div>
+      <label>Progetto attivo</label>
+      <select id="projSelect"><option value="">— seleziona —</option></select>
+    </div>
+    <button class="btn-ghost btn-sm" id="btnNew">+ Nuovo progetto</button>
+  </div>
+
+  <!-- FORM NUOVO PROGETTO -->
+  <div class="card hidden" id="newProjCard">
+    <h2>Nuovo progetto</h2>
+    <div class="row"><div>
+      <label>Nome progetto</label>
+      <input id="projName" placeholder="es. krateo-prod">
+    </div></div>
+    <label style="margin-top:14px">Pod Kubernetes da monitorare (per i log)</label>
+    <div id="podList">
+      <div class="pod-row">
+        <input class="pod-name" placeholder="nome pod">
+        <input class="pod-ns" placeholder="namespace" value="krateo-system">
+      </div>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn-ghost btn-sm" id="btnAddPod">+ Aggiungi pod</button>
+    </div>
+    <button class="btn-go" id="btnCreate" style="margin-top:14px">Crea progetto</button>
+    <div class="msg" id="createMsg"></div>
+  </div>
+
+  <!-- CONFIG LLM/EMBED (Ollama default) -->
+  <details class="card">
+    <summary style="cursor:pointer">⚙️ Configurazione modello (Ollama / OpenAI)</summary>
+    <div class="row" style="margin-top:14px">
+      <div><label>Provider</label>
+        <select id="cfgProvider"><option value="ollama">ollama</option><option value="openai">openai</option></select></div>
+      <div><label>Ollama base URL</label><input id="cfgOllama" value="http://host.docker.internal:11434"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div><label>Chat model</label><input id="cfgChat" value="gemma2:9b"></div>
+      <div><label>Embed model</label><input id="cfgEmbed" value="nomic-embed-text"></div>
+    </div>
+    <button class="btn-ghost btn-sm" id="btnCfg" style="margin-top:12px">Salva config</button>
+    <div class="msg" id="cfgMsg"></div>
+  </details>
+
+  <!-- UPLOAD MD -->
+  <div class="card">
+    <h2>📄 Knowledge Base (upload .md)</h2>
+    <input type="file" id="mdFile" accept=".md,.txt,.markdown">
+    <button class="btn-go" id="btnUpload" style="margin-top:12px">Carica nella RAG</button>
+    <div class="msg" id="uploadMsg"></div>
+  </div>
+
+  <!-- HEALTH CHECK -->
+  <div class="card">
+    <h2>🩺 Krateo Health Check</h2>
+    <button class="btn-go" id="btnAnalyze">Analizza Log e Stato Pod</button>
+    <div class="msg" id="analyzeMsg"></div>
+    <div class="out hidden" id="report" style="margin-top:14px"></div>
+  </div>
+</div>
+
+<script>
+const API = "/api/agent";
+const $ = s => document.querySelector(s);
+let currentProject = "";
+
+async function jf(url, opts){ const r = await fetch(url, opts); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function loadProjects(){
+  const list = await jf(`${API}/projects`);
+  const sel = $("#projSelect");
+  sel.innerHTML = '<option value="">— seleziona —</option>' +
+    list.map(p=>`<option value="${p.id}">${p.name}</option>`).join("");
+}
+
+$("#projSelect").onchange = e => currentProject = e.target.value;
+$("#btnNew").onclick = () => $("#newProjCard").classList.toggle("hidden");
+$("#btnAddPod").onclick = () => {
+  const d=document.createElement("div"); d.className="pod-row";
+  d.innerHTML='<input class="pod-name" placeholder="nome pod"><input class="pod-ns" placeholder="namespace" value="krateo-system">';
+  $("#podList").appendChild(d);
+};
+
+$("#btnCreate").onclick = async () => {
+  const name = $("#projName").value.trim();
+  if(!name){ $("#createMsg").innerHTML='<span class="err">Nome obbligatorio</span>'; return; }
+  const pods = [...document.querySelectorAll(".pod-row")].map(r=>({
+    name: r.querySelector(".pod-name").value.trim(),
+    namespace: r.querySelector(".pod-ns").value.trim() || "default"
+  })).filter(p=>p.name);
+  try{
+    const p = await jf(`${API}/projects`, {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,pods})});
+    $("#createMsg").innerHTML=`<span class="ok">Creato progetto #${p.id}</span>`;
+    await loadProjects(); $("#projSelect").value=p.id; currentProject=String(p.id);
+  }catch(e){ $("#createMsg").innerHTML=`<span class="err">${e.message}</span>`; }
+};
+
+$("#btnCfg").onclick = async () => {
+  try{
+    await jf(`${API}/config`, {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({provider:$("#cfgProvider").value,ollama_base_url:$("#cfgOllama").value,
+        chat_model:$("#cfgChat").value,embed_model:$("#cfgEmbed").value})});
+    $("#cfgMsg").innerHTML='<span class="ok">Config salvata</span>';
+  }catch(e){ $("#cfgMsg").innerHTML=`<span class="err">${e.message}</span>`; }
+};
+
+$("#btnUpload").onclick = async () => {
+  if(!currentProject){ $("#uploadMsg").innerHTML='<span class="err">Seleziona un progetto</span>'; return; }
+  const f = $("#mdFile").files[0];
+  if(!f){ $("#uploadMsg").innerHTML='<span class="err">Nessun file</span>'; return; }
+  const fd = new FormData(); fd.append("file", f);
+  $("#uploadMsg").textContent="Elaborazione...";
+  try{
+    const r = await jf(`${API}/projects/${currentProject}/upload`, {method:"POST",body:fd});
+    $("#uploadMsg").innerHTML=`<span class="ok">${r.chunks} chunk indicizzati</span>`;
+  }catch(e){ $("#uploadMsg").innerHTML=`<span class="err">${e.message}</span>`; }
+};
+
+$("#btnAnalyze").onclick = async () => {
+  if(!currentProject){ $("#analyzeMsg").innerHTML='<span class="err">Seleziona un progetto</span>'; return; }
+  $("#analyzeMsg").textContent="Analisi in corso (log + RAG + LLM)...";
+  $("#report").classList.add("hidden");
+  try{
+    const r = await jf(`${API}/projects/${currentProject}/analyze`, {method:"POST"});
+    $("#analyzeMsg").textContent="";
+    $("#report").textContent = r.report;
+    $("#report").classList.remove("hidden");
+  }catch(e){ $("#analyzeMsg").innerHTML=`<span class="err">${e.message}</span>`; }
+};
+
+loadProjects();
+</script>
+</body>
+</html>

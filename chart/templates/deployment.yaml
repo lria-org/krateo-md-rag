@@ -13,10 +13,16 @@ spec:
       {{- include "fireworks-app.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        # Rollout mirato dei SOLI pod quando cambiano i ConfigMap (html/nginx).
+        # Nessuna ricreazione di cluster/release: ArgoCD riconcilia solo il Deployment.
+        checksum/config-html: {{ .Files.Get "static/index.html" | sha256sum }}
+        checksum/config-agent-html: {{ .Files.Get "static/agent.html" | sha256sum }}
+        checksum/config-health-html: {{ .Files.Get "static/krateo-health.html" | sha256sum }}
+        checksum/config-nginx: {{ include (print $.Template.BasePath "/configmap-nginx.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "fireworks-app.selectorLabels" . | nindent 8 }}
     spec:
@@ -50,21 +56,21 @@ spec:
               done
 
               echo "==> [STARTUP] Tutti i servizi backend sono ONLINE! Avvio Firecrawl..."
-              node dist/src/harness.js --start-docker      # <--- CAMBIA DA --start-built A --start-docker
+              node dist/src/harness.js --start-docker
           ports:
-            - name: http
+            - name: firecrawl-api
               containerPort: 3002
               protocol: TCP
           livenessProbe:
             httpGet:
               path: /
-              port: http
+              port: firecrawl-api
             initialDelaySeconds: 45
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /
-              port: http
+              port: firecrawl-api
             initialDelaySeconds: 45
             periodSeconds: 10
           env:
@@ -75,7 +81,26 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 
-        # 2. SIDECAR: Playwright Service
+        # 2. SIDECAR: Nginx (Frontend + Reverse Proxy on Port 8080)
+        - name: nginx-frontend
+          image: nginx:alpine
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: html-files
+              mountPath: /usr/share/nginx/html
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+        # 3. SIDECAR: Playwright Service
         - name: playwright-service
           image: "{{ .Values.sidecars.playwright.image }}"
           ports:
@@ -94,7 +119,7 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
 
-        # 3. SIDECAR: Redis Server
+        # 4. SIDECAR: Redis Server
         - name: redis
           image: "{{ .Values.sidecars.redis.image }}"
           command: ["redis-server", "--bind", "0.0.0.0", "--maxmemory", "2gb", "--maxmemory-policy", "allkeys-lru"]
@@ -103,7 +128,7 @@ spec:
               containerPort: 6379
               protocol: TCP
 
-        # 4. SIDECAR: RabbitMQ Message Broker
+        # 5. SIDECAR: RabbitMQ Message Broker
         - name: rabbitmq
           image: "{{ .Values.sidecars.rabbitmq.image }}"
           ports:
@@ -116,9 +141,10 @@ spec:
             - name: RABBITMQ_DEFAULT_PASS
               value: "guest"
 
-        # 5. SIDECAR: Nuq-Postgres Database
+        # 6. SIDECAR: Nuq-Postgres Database (custom: nuq-postgres + pgvector)
         - name: nuq-postgres
           image: "{{ .Values.sidecars.postgres.image }}"
+          imagePullPolicy: {{ .Values.sidecars.postgres.pullPolicy | default "IfNotPresent" }}
           ports:
             - name: postgres
               containerPort: 5432
@@ -130,6 +156,36 @@ spec:
               value: "postgres"
             - name: POSTGRES_DB
               value: "postgres"
+
+        # 7. SIDECAR: Agent-Core (Orchestratore AI - RAG + Log Analysis + RCA)
+        {{- if .Values.agentCore.enabled }}
+        - name: agent-core
+          image: "{{ .Values.sidecars.agentCore.image }}"
+          imagePullPolicy: {{ .Values.agentCore.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: agent-api
+              containerPort: {{ .Values.agentCore.port }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.agentCore.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /api/agent/health
+              port: agent-api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        {{- end }}
+
+      volumes:
+        - name: html-files
+          configMap:
+            name: {{ include "fireworks-app.fullname" . }}-html
+        - name: nginx-config
+          configMap:
+            name: {{ include "fireworks-app.fullname" . }}-nginx-config
 
       {{- with .Values.nodeSelector }}
       nodeSelector:

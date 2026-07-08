@@ -116,7 +116,16 @@
       <button id="download" class="btn-ghost hidden">⬇ JSON</button>
       <a id="crawlid" class="link" style="align-self:center"></a>
     </div>
+    <!-- INGEST NELLA RAG dell'agente -->
+    <div id="ragbar" class="toolbar hidden" style="border-top:1px solid var(--border);padding-top:12px">
+      <select id="ragProj" style="max-width:220px;width:auto">
+        <option value="">— nuovo progetto (nome sito) —</option>
+      </select>
+      <button id="ingestRag" class="btn-save">🧠 Ingesta in RAG</button>
+      <a class="link" href="/krateo-health.html" style="align-self:center">🩺 Vai a Krateo Health →</a>
+    </div>
     <div id="savehint" class="hint hidden"></div>
+    <div id="raghint" class="hint hidden"></div>
   </div>
 
   <!-- LOG -->
@@ -361,6 +370,8 @@ async function poll(){
         $('saveZip').classList.remove('hidden');
         $('saveMega').classList.remove('hidden');
         $('download').classList.remove('hidden');
+        $('ragbar').classList.remove('hidden');
+        loadRagProjects();
         if(!window.showDirectoryPicker){
           $('savehint').classList.remove('hidden');
           $('savehint').textContent='ℹ Questo browser non supporta la scrittura diretta su cartella: usa "Scarica ZIP".';
@@ -410,8 +421,46 @@ function downloadJson(){
   a.download=siteHost+'-'+(crawlId||'result')+'.json'; a.click();
 }
 
+/* ---------- INGEST del MEGA MD nella RAG dell'agente ---------- */
+const AGENT='/api/agent';
+async function loadRagProjects(){
+  try{
+    const r=await fetch(AGENT+'/projects'); if(!r.ok) return;
+    const list=await r.json();
+    const sel=$('ragProj');
+    sel.innerHTML='<option value="">— nuovo progetto (nome sito) —</option>'+
+      list.map(p=>'<option value="'+p.id+'">'+p.name+'</option>').join('');
+  }catch(e){ /* agent-core non raggiungibile: ingest disabilitato di fatto */ }
+}
+async function ingestRag(){
+  if(!allData.length){ raghint('Nessuna pagina da ingestare.','err'); return; }
+  const btn=$('ingestRag'); btn.disabled=true; const old=btn.textContent; btn.textContent='Ingest…';
+  try{
+    let pid=$('ragProj').value;
+    // se nessun progetto scelto -> crea progetto col nome del sito
+    if(!pid){
+      const cr=await fetch(AGENT+'/projects',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:siteHost,pods:[]})});
+      if(!cr.ok) throw new Error(await cr.text());
+      pid=(await cr.json()).id; await loadRagProjects(); $('ragProj').value=pid;
+    }
+    // invia il MEGA MD come file .md
+    const blob=new Blob([megaDoc()],{type:'text/markdown'});
+    const fd=new FormData(); fd.append('file',blob,siteHost+'-MEGA.md');
+    const up=await fetch(AGENT+'/projects/'+pid+'/upload',{method:'POST',body:fd});
+    if(!up.ok) throw new Error(await up.text());
+    const j=await up.json();
+    raghint('✓ Ingestati '+j.chunks+' chunk nella RAG (progetto #'+pid+'). Ora l\'agente puo\' usarli per la RCA.','ok');
+    log('RAG: '+j.chunks+' chunk indicizzati nel progetto #'+pid,'ok');
+  }catch(e){ raghint('Errore ingest: '+e.message,'err'); log('Ingest RAG fallito: '+e.message,'err'); }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
+function raghint(msg,cls){ const h=$('raghint'); h.classList.remove('hidden'); h.textContent=msg;
+  h.style.color = cls==='err' ? 'var(--red)' : (cls==='ok' ? 'var(--green)' : 'var(--muted)'); }
+
 $('start').addEventListener('click',start);
 $('stop').addEventListener('click',stop);
+$('ingestRag').addEventListener('click',ingestRag);
 $('saveFolder').addEventListener('click',saveToFolder);
 $('saveZip').addEventListener('click',saveAsZip);
 $('saveMega').addEventListener('click',saveMega);

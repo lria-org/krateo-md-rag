@@ -1,0 +1,30 @@
+{{- if .Values.rbac.create }}
+# ClusterRole: permessi lettura log pod (necessari ad agent-core per RCA)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fireworks-app.fullname" . }}-log-reader
+  labels:
+    {{- include "fireworks-app.labels" . | nindent 4 }}
+rules:
+  # pods + pods/log = lista pod e log; events = 'kubectl get events' per la RCA
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+---
+# Binding sul ServiceAccount del pod a 7 container
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fireworks-app.fullname" . }}-log-reader-binding
+  labels:
+    {{- include "fireworks-app.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fireworks-app.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "fireworks-app.fullname" . }}-log-reader
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
