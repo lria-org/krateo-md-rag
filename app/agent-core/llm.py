@@ -30,7 +30,9 @@ def embed(text: str) -> list[float]:
             timeout=60,
         )
         r.raise_for_status()
-        return r.json()["data"][0]["embedding"]
+        # forza tutti i valori a float: alcuni provider ritornano int misti a float
+        # (es. 0 senza decimali) e psycopg rifiuta gli array a tipi misti.
+        return [float(x) for x in r.json()["data"][0]["embedding"]]
     # ollama
     r = httpx.post(
         f'{s["ollama_base_url"]}/api/embeddings',
@@ -38,7 +40,7 @@ def embed(text: str) -> list[float]:
         timeout=60,
     )
     r.raise_for_status()
-    return r.json()["embedding"]
+    return [float(x) for x in r.json()["embedding"]]
 
 
 def chat(prompt: str) -> str:

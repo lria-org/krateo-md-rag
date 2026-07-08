@@ -85,7 +85,7 @@ sidecars:
 agentCore:
   enabled: true
   port: 8000
-  pullPolicy: IfNotPresent   # locale/kind: usa l'immagine caricata con 'kind load'; in prod ArgoCD la pulla dal registry
+  pullPolicy: Always   # GitOps: le immagini stanno su ghcr; con :latest serve Always per ripullare i fix
   env:
     EMBED_PROVIDER: "ollama"
     OLLAMA_BASE_URL: "http://host.docker.internal:11434"
