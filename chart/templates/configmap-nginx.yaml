@@ -10,11 +10,11 @@ data:
         listen 8080;
         server_name localhost krateo.local;
 
-        # Frontend: Serviamo la pagina statica HTML
+        # Frontend: pagina principale = Krateo Health (Log & RCA)
         location / {
             root /usr/share/nginx/html;
-            index index.html;
-            try_files $uri $uri/ /index.html;
+            index krateo-health.html;
+            try_files $uri $uri/ /krateo-health.html;
         }
 
         # Backend API Proxy per Firecrawl
