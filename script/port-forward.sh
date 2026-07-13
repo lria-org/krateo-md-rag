@@ -1,8 +1,9 @@
 #!/bin/bash
 
 PORT=31181
-NAMESPACE="krateo-demo"
-SERVICE="firecrawl-fireworks-app-skeleton"
+# Stack gestito da Argo/Krateo (composition krateo-md-rag-fbc2dv66) nel namespace fireworks-app.
+NAMESPACE="fireworks-app"
+SERVICE="krateo-md-rag-fbc2dv66-fireworks-app-skeleton"
 
 echo "🔄 Pulizia: controllo se ci sono vecchi tunnel aperti sulla porta $PORT..."
 

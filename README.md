@@ -1,137 +1,204 @@
-# krateo-md-rag (Firecrawl Platform) - Manuale Operativo & Documentazione di Architettura
+# krateo-md-rag — Manuale Operativo & Architettura (Firecrawl + Agent RAG/RCA su Krateo PlatformOps)
 
-Questa documentazione fornisce una guida passo-passo e un'analisi architetturale approfondita per il progetto **Krateo MD-RAG**. Il sistema implementa un'infrastruttura di scraping ed estrazione dati altamente resiliente basata sulla piattaforma **Firecrawl**, ottimizzata per l'integrazione con sistemi RAG (Retrieval-Augmented Generation) operanti su documenti Markdown. L'intero stack è orchestrato all'interno di un cluster Kubernetes locale tramite la suite **Krateo Platform Ops**.
+Questa documentazione è la guida completa al progetto **Krateo MD-RAG**: una piattaforma che parte da un motore di **scraping web resiliente** basato su **Firecrawl** e si evolve in un **Agente AI multi-progetto** capace di ingestione di documentazione Markdown in una **Knowledge Base vettoriale (RAG)**, **analisi dei log** dei pod Kubernetes e **Root Cause Analysis (RCA)** assistita da LLM.
+
+L'intero stack gira in un **unico Pod a 7 container** dentro un cluster Kubernetes locale (**Kind**), ed è distribuito in modalità **GitOps** dalla suite **Krateo PlatformOps v3**: una **CompositionDefinition** (gestita dal *core-provider*, basato su Helm) genera repo, pipeline e una **Application ArgoCD** che riconcilia il chart Helm direttamente dal repository Git. Modifichi il codice, fai `git push`, la CI compila le immagini su GHCR e Argo allinea il cluster allo stato desiderato del repo.
+
+> In una riga: **Firecrawl** raccoglie la conoscenza → la **RAG** la indicizza → l'**Agente** confronta i log reali dei pod con quella conoscenza e produce una diagnosi con azioni correttive.
 
 ---
 
-## 🛠️ 1. KRateo SETUP
+## 📑 Indice
 
-La Krateo Platform Ops consente di standardizzare la gestione delle risorse cloud e on-premises sul modello GitOps e Infrastructure as Code (IaC) sfruttando Crossplane sotto il cofano.
+- [0. Quick Start](#-0-quick-start)
+- [1. Krateo Setup](#️-1-krateo-setup)
+- [2. Setup Blueprint](#️-2-setup-blueprint)
+- [3. Setup Composition](#-3-setup-composition)
+- [4. GitHub & CI/CD](#-4-github--cicd)
+- [5. APP — Architettura del Pod a 7 Container](#️-5-app--architettura-del-pod-a-7-container)
+- [6. Agent-Core — RAG, Log Analysis & RCA](#-6-agent-core--rag-log-analysis--rca)
+- [7. Flusso DevOps (GitOps completo)](#-7-flusso-devops-gitops-completo)
+- [8. Evoluzione: dal Report all'Azione (remediation loop)](#-8-evoluzione-dal-report-allazione-remediation-loop)
+- [Diagrammi (cartella `docs/`)](#-diagrammi-cartella-docs)
+- [TAKE AWAY — Errori comuni del deploy GitOps](#-take-away--errori-comuni-del-deploy-gitops-argo--composition--provider-dai-miei-appunti-giornalieri)
+
+---
+
+## 🗺️ Diagrammi (cartella `docs/`)
+
+I diagrammi ASCII di riferimento sono in [`docs/`](docs/README.md), un file per vista, così da poterli consultare o incollare come contesto in modo indipendente:
+
+| # | Diagramma | Cosa mostra |
+|---|---|---|
+| 01 | [Architettura Software](docs/01-architettura-software.md) | Pod a 7 container, routing Nginx, flussi verso pgvector/K8s/Ollama. |
+| 02 | [Processo di Deploy](docs/02-processo-deploy.md) | GitOps `push → CI → GHCR → ArgoCD sync` + gotcha. |
+| 03 | [Infrastruttura](docs/03-infrastruttura.md) | Layout host/cluster, namespace, servizi esterni. |
+| 04 | [Aggiornamento Composition](docs/04-aggiornamento-composition.md) | Propagazione di una modifica al Blueprint/CompositionDefinition. |
+| 05 | [Flusso RAG · LOG · Agente](docs/05-flusso-rag-log-agente.md) | Sequenza runtime dell'analisi RCA. |
+
+---
+
+## 🚀 0. QUICK START
+
+Questa sezione porta da zero a un ambiente funzionante. Le sezioni successive spiegano in profondità ogni pezzo.
+
+### 0.1 Prerequisiti
+
+| Requisito | Perché serve | Note |
+|---|---|---|
+| **Docker Desktop** (o daemon compatibile) | Kind gira dentro Docker; il pod ha sidecar pesanti (Chromium/Playwright). | Minimo **4 vCPU / 8 GB RAM**. |
+| **Krateo CLI** (`krateo`) | Inizializza il control plane locale (`krateo quickstart`). | Vedi docs.krateo.io. |
+| **kubectl** + **helm** | Debug, sync manuale, ispezione risorse. | Il portale Krateo non basta per il debug per-container. |
+| **GitHub PAT** (classic) | Push immagini su GHCR + pull dal cluster. | Scope: `repo`, `write:packages`, `read:packages`. |
+| **Ollama in locale** | Fornisce **embedding** e **chat** all'Agent-Core senza chiamare API a pagamento. Tiene tutto sul tuo Mac e velocizza la demo. | `OLLAMA_BASE_URL=http://host.docker.internal:11434`. |
+
+**Modelli Ollama da scaricare** (una volta sola):
+
+```bash
+ollama pull nomic-embed-text   # embedding, dimensione 768 (deve combaciare con EMBED_DIM)
+ollama pull gemma2:9b          # modello di chat per la RCA (puoi usarne uno più leggero/pesante)
+```
+
+> ⚠️ Il nome del modello di embedding e la sua **dimensione** devono combaciare con `EMBED_DIM` in `values.yaml` (`nomic-embed-text` = 768). Se cambi modello, cambia anche la dimensione della colonna `vector`.
+
+### 0.2 Bootstrap del cluster e dei provider
+
+```bash
+# 1) Control plane locale: cluster Kind + KCO (core-provider, oasgen/KOG) + ArgoCD + Console Krateo
+krateo quickstart
+
+# 2) Verifica che i provider nativi Krateo siano installati (li porta il quickstart / marketplace)
+helm list -A | grep -E "core-provider|oasgen-provider|git-provider|github-provider|argocd"
+
+# 3) Segreto pull GHCR nel namespace applicativo (dettaglio in §1.3)
+kubectl create secret docker-registry ghcr-secret \
+  --docker-server=ghcr.io --docker-username="<UTENTE>" \
+  --docker-password="<PAT>" --docker-email="<EMAIL>" -n fireworks-app
+```
+
+### 0.3 Installazione della Blueprint e della Composition (dal template Krateo)
+
+Il progetto nasce dalla blueprint **`fireworks-app-skeleton`** e da una blueprint di **scaffolding con composition** (`github-scaffolding-with-composition-page`) del catalogo Krateo. Questa, compilata dal portale, **genera automaticamente**: il repository Git, la pipeline CI/CD e la **Application ArgoCD** che sincronizza il chart.
+
+```bash
+# Installa le blueprint dal repo template Krateo (Helm)
+helm repo add krateo https://charts.krateo.io
+helm repo update
+
+# Blueprint applicativa (skeleton multi-container)
+helm install fireworks-app-skeleton krateo/fireworks-app-skeleton -n krateo-system
+
+# Blueprint di scaffolding: crea repo + composition + Application Argo
+helm install github-scaffolding-with-composition-page \
+  krateo/github-scaffolding-with-composition-page -n krateo-system
+```
+
+Dal **portale Krateo** si compila poi il form della composition (nome app, org GitHub, ecc.). Krateo scaffolda il repo `lria-org/krateo-md-rag` e crea l'Application ArgoCD `krateo-md-rag-<hash>` che punta a `chart/` sul branch `main`.
+
+### 0.4 Primo commit
+
+Il repo scaffoldato contiene lo skeleton. Il primo commit reale porta il codice applicativo (Dockerfile Firecrawl, chart, static) sul branch `main`, scatenando la CI:
+
+```bash
+git clone https://github.com/lria-org/krateo-md-rag.git
+cd krateo-md-rag
+# ... aggiungi Dockerfile custom, chart/, app/ ...
+git add -A
+git commit -m "first commit: Firecrawl skeleton + chart"
+git push origin main
+```
+
+Da qui il ciclo è sempre lo stesso: **push → CI builda le immagini su GHCR → sync ArgoCD → pod aggiornato** (vedi §7 e la §TAKE AWAY per gli intoppi tipici).
+
+---
+
+## 🛠️ 1. Krateo Setup
+
+**Krateo PlatformOps** è una piattaforma di Internal Developer Platform (IDP) che standardizza la gestione delle risorse cloud e on-prem con un modello **GitOps + Infrastructure as Code**. Dalla **v2** Krateo ha abbandonato Crossplane: il motore di templating è **Helm** e il control plane è **Krateo Composable Operations (KCO)**, un insieme di operatori nativi Krateo. In pratica Krateo permette a un team di esporre "self-service" applicazioni complesse (via Blueprint/Composition) che gli sviluppatori istanziano dal portale senza conoscere i dettagli Kubernetes sottostanti.
+
+Gli attori principali del control plane (Krateo v3):
+
+- **core-provider** (KCO) — operatore che, da una **CompositionDefinition** che referenzia un chart Helm con `values.schema.json`, genera il CRD corrispondente e deploya un `composition-dynamic-controller` che renderizza il chart con l'RBAC più restrittivo possibile. È il cuore del sistema di composizione (al posto di Crossplane).
+- **oasgen-provider** (KOG — Krateo Operator Generator) — genera CRD e controller (`Rest Dynamic Controller`) direttamente da spec **OpenAPI** (`RestDefinition`), senza scrivere operatori a mano. È così che nascono i provider verso API esterne (es. GitHub).
+- **git-provider / github-provider** — operatori nativi Krateo per gestione repository e scaffolding (clonano template, creano repo, pushano lo skeleton).
+- **ArgoCD** — riconciliazione continua GitOps: confronta lo stato del cluster con lo stato desiderato nel repo Git e allinea (sync).
+- **Console/Portal Krateo** — interfaccia self-service per istanziare le Composition (form-driven): compilando il form crei un **Composite Resource** del CRD generato dalla CompositionDefinition.
 
 ### 1.1 Inizializzazione del Cluster Locale (Kind Engine)
 
-Krateo Quickstart configura un cluster Kubernetes locale basato su **Kind** (Kubernetes in Docker). Prima di procedere, assicurarsi che Docker Desktop o un demone Docker compatibile sia avviato e presenti risorse adeguate (minimo 4 vCPU, 8 GB di RAM consigliati per ospitare i sidecar pesanti come Playwright/Chromium).
-
-Eseguire l'inizializzazione dell'ambiente di controllo:
+`krateo quickstart` configura un cluster Kubernetes locale basato su **Kind** (Kubernetes in Docker). Assicurarsi che Docker sia avviato con risorse adeguate (min. 4 vCPU, 8 GB RAM per ospitare Playwright/Chromium e i sidecar).
 
 ```bash
 krateo quickstart
 ```
 
-Questo comando automatizza l'installazione di:
+Installa automaticamente:
 
-- Un cluster Kubernetes denominato `krateo-quickstart-control-plane`.
-- **ArgoCD**: per la sincronizzazione continua dello stato desiderato dai repository Git.
-- **Crossplane**: il motore di aggregazione API che funge da control plane universale.
-- Le definizioni delle risorse di base (CRD) per la console utente di Krateo.
+- Un cluster Kind `krateo-quickstart-control-plane`.
+- **ArgoCD** (namespace `krateo-system`) per il sync GitOps.
+- **KCO** — gli operatori nativi Krateo: `core-provider`, `oasgen-provider` (KOG), `git-provider`, `github-provider`.
+- Le CRD e i componenti della Console Krateo (authn, portal, frontend, ingester/presenter degli eventi, finops, snowplow, ecc.).
 
-### 1.2 Installazione ed Abilitazione degli Operatori (Crossplane Providers)
+### 1.2 Provider nativi Krateo (KCO)
 
-Per consentire a Krateo di orchestrare sia componenti infrastrutturali che pacchetti applicativi, è necessario installare e configurare i seguenti Core Provider. I manifesti possono essere applicati tramite la console di Krateo o via `kubectl`.
+In Krateo v3 **non** si installano provider Crossplane. Gli operatori sono componenti Krateo, distribuiti come release Helm dal quickstart/marketplace. Nel cluster li verifichi con `helm list -A`:
 
-#### A. Provider Kubernetes
+| Provider | Versione (esempio dal cluster) | Ruolo |
+|---|---|---|
+| **`core-provider`** | 1.0.0 | Gestisce le `CompositionDefinition`: da un chart Helm + `values.schema.json` genera il CRD e il `composition-dynamic-controller` che lo renderizza. |
+| **`oasgen-provider`** (KOG) | 0.11.1 | Genera CRD + controller da spec OpenAPI (`RestDefinition`). |
+| **`git-provider`** | 0.10.1 | Operazioni Git (clone template, push skeleton). |
+| **`github-provider`** (+ `github-provider-kog-repo`) | 0.2.2 | Provider verso le API GitHub (creazione repo, secret), generato via KOG. |
 
-Consente a Crossplane di interagire con le API interne del cluster per creare oggetti nativi come `Deployment`, `Service`, `ConfigMap` e `Secret`.
+> Le risorse Kubernetes native (Deployment, Service, ConfigMap, Secret) dell'app **non** hanno bisogno di un "provider-kubernetes": le applica direttamente **ArgoCD** sincronizzando il chart dal repo. Non esiste alcun `kind: Release` di `helm.crossplane.io` nel cluster.
 
-```yaml
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: provider-kubernetes
-spec:
-  package: xpkg.upbound.io/crossplane/provider-kubernetes:v0.9.0
-```
+### 1.3 Segreti di Sicurezza
 
-#### B. Provider Helm
+**PAT GitHub** — da **Settings > Developer Settings > Personal Access Tokens (classic)** con scope `repo`, `write:packages`, `read:packages`.
 
-Indispensabile per il deployment dei grafici Helm (HelmReleases) definiti dalle nostre composizioni e blueprint.
-
-```yaml
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: provider-helm
-spec:
-  package: xpkg.upbound.io/crossplane/provider-helm:v0.11.0
-```
-
-#### C. Provider GitHub
-
-Utilizzato se si desidera automatizzare la creazione di repository o segreti dell'organizzazione direttamente dal control plane.
-
-```yaml
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: provider-github
-spec:
-  package: xpkg.upbound.io/crossplane-contrib/provider-github:v0.1.0
-```
-
-### 1.3 Configurazione e Generazione dei Segreti di Sicurezza
-
-L'applicazione necessita di un canale sicuro per interagire con i registri dei container protetti e con le API esterne. I segreti devono essere collocati nel namespace operativo dell'applicazione, definito come `krateo-demo`.
-
-#### A. Generazione del Personal Access Token (PAT) di GitHub
-
-1. Accedere al proprio account GitHub e navigare su **Settings > Developer Settings > Personal Access Tokens > Tokens (classic)**.
-2. Generare un nuovo token impostando i seguenti scope minimi richiesti:
-   - `repo` (controllo completo dei repository privati)
-   - `write:packages` (caricamento delle immagini Docker su GHCR)
-   - `read:packages` (download delle immagini Docker da GHCR)
-
-#### B. Creazione dell'Image Pull Secret in Kubernetes
-
-Per consentire ai nodi del cluster Kind di autenticarsi su GitHub Container Registry (ghcr.io) e scaricare l'immagine applicativa compilata:
+**Image Pull Secret** — perché i nodi Kind scarichino le immagini da GHCR. Va creato nel **namespace applicativo** (qui `fireworks-app`, vedi §3):
 
 ```bash
 kubectl create secret docker-registry ghcr-secret \
   --docker-server=ghcr.io \
-  --docker-username="IL_TUO_UTENTE_GITHUB" \
-  --docker-password="IL_TUO_PERSONAL_ACCESS_TOKEN" \
-  --docker-email="LA_TUA_EMAIL@esempio.com" \
-  -n krateo-demo
+  --docker-username="<UTENTE_GITHUB>" \
+  --docker-password="<PAT>" \
+  --docker-email="<EMAIL>" \
+  -n fireworks-app
 ```
 
-#### C. Configurazione delle Credenziali dei Provider Crossplane
+**Credenziali GitHub per i provider Krateo** — `git-provider`/`github-provider` hanno bisogno di un secret con il PAT per creare repo e pushare lo skeleton. Il nome/namespace del secret dipende da come la blueprint di scaffolding è configurata (tipicamente in `krateo-system`); si crea da portale o via `kubectl create secret generic`.
 
-Per sbloccare il Provider Kubernetes, creare una configurazione di autenticazione che punti al file kubeconfig interno del cluster, permettendo a Crossplane di agire come amministratore:
-
-```bash
-kubectl create secret generic cluster-config-secret --from-file=kubeconfig=$HOME/.kube/config -n krateo-system
-```
+> In Krateo v1 qui si creava un `cluster-config-secret` col kubeconfig per il *provider-kubernetes* di Crossplane. In **v3 non serve**: le risorse le applica ArgoCD, non un provider Crossplane.
 
 ---
 
 ## 🏗️ 2. Setup Blueprint
 
-Il Blueprint in Krateo rappresenta il modello architetturale standardizzato (il "calco") riutilizzabile dal team di sviluppo per istanziare l'applicazione.
+La **Blueprint** è il modello architetturale riutilizzabile (il "calco") con cui il team istanzia l'applicazione.
 
-### 2.1 Download e Clonazione del Blueprint Originario
+### 2.1 Origine
 
-Il punto di partenza è il blueprint strutturale denominato `fireworks-app-skeleton`, fornito dal catalogo Krateo per la creazione rapida di applicazioni poli-container (App + Sidecars).
+Punto di partenza: la blueprint **`fireworks-app-skeleton`** del catalogo Krateo, pensata per app poli-container (App + Sidecars). La blueprint di **scaffolding** associata genera repo + pipeline + Composition + Application Argo.
 
 ```bash
 git clone https://github.com/lria-org/krateo-md-rag.git
 cd krateo-md-rag
 ```
 
-### 2.2 Scomposizione e Ispezione della Struttura Modello
+### 2.2 Struttura del repo
 
-Il blueprint scaricato si articola nelle seguenti componenti core:
+- `app/` — sorgenti applicativi: `Dockerfile` (ponte Firecrawl), `agent-core/` (microservizio AI), `nuq-postgres/` (immagine Postgres custom con pgvector), `tools/` (utility di scraping).
+- `chart/` — pacchetto Helm: `Chart.yaml`, `values.yaml`, `templates/`, e `static/` (le pagine web servite da Nginx).
+- `.github/workflows/ci.yml` — pipeline CI che compila e pubblica **le 3 immagini** su GHCR.
+- `script/port-forward.sh` — tunnel locale verso il service.
 
-- `app/` — Contiene gli asset applicativi locali (tra cui il sorgente statico del frontend).
-- `chart/` — Contiene la definizione del pacchetto Helm (`Chart.yaml`, `values.yaml` e la cartella `templates/`).
-- `.github/workflows/` — Contiene le pipeline pre-configurate per automatizzare la compilazione e il rilascio.
+### 2.3 Dockerfile ponte per Firecrawl
 
-### 2.3 Refactoring del Dockerfile Modello
-
-Il blueprint nativo implementava uno skeleton statico basato su un'immagine Bitnami Nginx. Per abilitare la logica di Firecrawl, il file `Dockerfile` posizionato nella root del progetto è stato interamente riscritto per ereditare l'ambiente runtime ufficiale di Firecrawl:
+Lo skeleton nativo era basato su Nginx Bitnami. È stato riscritto per ereditare il runtime ufficiale di Firecrawl:
 
 ```dockerfile
 FROM ghcr.io/firecrawl/firecrawl:latest
-
-# Eventuali personalizzazioni di script o estensioni locali vanno inserite qui
 USER root
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 USER node
@@ -141,313 +208,345 @@ USER node
 
 ## 🧩 3. Setup Composition
 
-La Composition in Crossplane è l'oggetto logico che traduce una richiesta astratta dell'utente (un Claim) in un insieme concreto di risorse Kubernetes configurate (Deployment, Service, PersistentVolume).
+In Krateo v3 la **Composition** è una **`CompositionDefinition`** gestita dal `core-provider` (basata su Helm, non su Crossplane): il portale compila un form → si crea un **Composite Resource** del CRD generato → il `composition-dynamic-controller` renderizza il chart della blueprint. Nel nostro caso la blueprint di scaffolding non installa l'app direttamente: **scaffolda il repo e crea una Application ArgoCD** che diventa la sorgente di verità del deploy.
 
-### 3.1 Architettura della Composition per il Chart Helm
+### 3.1 Il modello GitOps effettivo
 
-La Composition prende l'input utente inviato tramite la Console Krateo e lo mappa direttamente nei parametri interni del Chart Helm di Firecrawl. L'oggetto centrale è un `Release` del provider Helm:
+Questo è il punto architetturale più importante (e la fonte della maggior parte degli errori di deploy — vedi §TAKE AWAY):
 
-```yaml
-apiVersion: helm.crossplane.io/v1beta1
-kind: Release
-metadata:
-  name: firecrawl-application-release
-spec:
-  forProvider:
-    chart:
-      repository: https://lria-org.github.io/krateo-md-rag
-      name: fireworks-app
-      version: 0.1.0
-    namespace: krateo-demo
-    values:
-      replicaCount: 1
-      image:
-        tag: "latest"
+- La composition di scaffolding crea una **Application ArgoCD** `krateo-md-rag-<hash>` (namespace `krateo-system`).
+- L'Application punta a: **repoURL** = il tuo repo, **path** = `chart/`, **targetRevision** = `main`.
+- La **destination namespace** dell'Application è **`fireworks-app`**: è lì che vengono create tutte le risorse del chart (Deployment, Service, ConfigMap, RBAC).
+- La `syncPolicy` è **manuale**: Argo rileva il drift ma **non applica** finché non lanci un sync.
+
+Trigger del sync (equivale al pulsante "Sync" nella UI Argo):
+
+```bash
+kubectl -n krateo-system patch application krateo-md-rag-<hash> --type merge \
+  -p '{"operation":{"initiatedBy":{"username":"me"},"sync":{"revision":"main"}}}'
 ```
 
-### 3.2 Sincronizzazione dello Stato tramite Compositions
+### 3.2 Riconciliazione
 
-Ogni volta che viene effettuata una variazione nei file del Chart, Crossplane intercetta l'evento, esegue un "dry-run" di validazione e applica le modifiche in modalità Server-Side Apply. Se un container sidecar fallisce o viene rimosso manualmente da un amministratore, Crossplane interviene autonomamente per ripristinare i 6 container originari richiesti dalla Composition.
+Ogni modifica ai file del chart nel repo, dopo un sync, viene applicata in Server-Side Apply. Se un container sidecar viene rimosso a mano, Argo lo ripristina allo stato desiderato del repo. Le immagini vengono **sempre da GHCR** (non da `kind load`): la CI deve aver pushato le immagini prima che il pod le pulli.
 
-### 3.3 Namespace e Claim
+### 3.3 Namespace
 
-- **Namespace**: le risorse vengono rilasciate nel namespace isolato `krateo-demo`.
-- **Claim**: il file YAML di istanziazione applicato dall'utente per scatenare la creazione del cluster applicativo, che innesca la Composition.
+- Risorse applicative: namespace **`fireworks-app`** (destination dell'Application Argo).
+- Control plane Krateo (KCO) + ArgoCD: namespace `krateo-system`.
+
+> Nota storica: nella prima iterazione l'app era stata avviata con un `helm install` **manuale** (release `firecrawl` in `krateo-demo`). Quella via è stata dismessa a favore del GitOps puro per evitare drift e conflitti di NodePort (vedi §TAKE AWAY).
 
 ---
 
-## 🐙 4. GITHUB
+## 🐙 4. GitHub & CI/CD
 
-La governance del codice sorgente e la distribuzione dei pacchetti applicativi sono interamente affidate all'ecosistema GitHub dell'organizzazione.
+Governance del codice e distribuzione immagini affidate a GitHub (org `lria-org`, repo `krateo-md-rag`, registry `ghcr.io`).
 
-### 4.1 Configurazione dell'Organizzazione e dei Repository
+### 4.1 Impostazioni repository
 
-- **Organizzazione target**: `lria-org`
-- **Repository**: `krateo-md-rag`
-- **Visibilità**: impostata per garantire l'accesso ai moduli del cluster Krateo.
+- **Settings > Actions > General > Workflow permissions** → **Read and write permissions** (per pushare i package su GHCR).
+- **Settings > Secrets and variables > Actions** → eventuali secret (la CI usa `GITHUB_TOKEN` nativo).
 
-Nelle impostazioni della repository (**Settings > Actions > General**), assicurarsi che sotto *Workflow permissions* sia abilitata l'opzione **Read and write permissions**, indispensabile per consentire alla pipeline di caricare i pacchetti d'immagine compilati sul registro interno.
+### 4.2 Le 3 immagini su GHCR
 
-Sotto **Settings > Secrets and variables > Actions**, impostare eventuali secret necessari (es. `CR_PAT` per il container registry).
-
-### 4.2 GitHub Packages (GHCR)
-
-Tutte le immagini Docker compilate vengono ospitate su GHCR. L'identificativo univoco dell'immagine del microservizio è:
+La pipeline compila e pubblica **tre** immagini (non più una sola):
 
 ```
-ghcr.io/lria-org/krateo-md-rag:latest
+ghcr.io/lria-org/krateo-md-rag:latest          # ponte Firecrawl (container principale)
+ghcr.io/lria-org/krateo-agent-core:latest      # microservizio AI (RAG + log analysis + RCA)
+ghcr.io/lria-org/krateo-nuq-postgres:latest    # Postgres custom = nuq-postgres + pgvector
 ```
 
-Quando la pipeline compila l'immagine per la prima volta, il pacchetto su GitHub potrebbe essere contrassegnato come *Private*. È fondamentale navigare sulla pagina del pacchetto (**Package Settings**) e collegarlo esplicitamente alla repository `krateo-md-rag`, garantendo che i permessi di pull siano sincronizzati con il token PAT configurato nel cluster Krateo.
+> ⚠️ Al primo build i package su GHCR nascono **Private**. Vanno resi **Public** (o coperti dal `ghcr-secret`), altrimenti i pod vanno in `ImagePullBackOff`. Package settings → Change visibility → Public, e collegali al repo `krateo-md-rag`.
 
-### 4.3 GitHub Actions — Pipeline CI/CD (`build-and-push.yml`)
+### 4.3 Pipeline CI (`.github/workflows/ci.yml`)
 
-All'interno di `.github/workflows/build-and-push.yml` è implementata la pipeline di integrazione continua:
+La CI usa una **matrix** per buildare i tre context in parallelo e pushare su GHCR con tag `:latest` ad ogni push su `main`:
 
 ```yaml
-name: Build and Push Firecrawl Custom Image
-
+name: ci
 on:
   push:
-    branches: [ "main" ]
-
+    branches: [ 'main' ]
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - { name: krateo-md-rag,       context: app }
+          - { name: krateo-agent-core,   context: app/agent-core }
+          - { name: krateo-nuq-postgres, context: app/nuq-postgres }
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v5
         with:
-          context: .
+          context: "{{defaultContext}}:${{ matrix.context }}"
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/lria-org/krateo-md-rag:latest
+          tags: "ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:latest"
 ```
 
-La pipeline esegue, in ordine: checkout del codice, autenticazione su `ghcr.io`, build dell'immagine basata sul Dockerfile custom, e push dell'immagine con tag `latest`.
+Ordine: checkout → login GHCR → build multi-arch → push. **Attenzione al tag mobile `:latest`**: con `pullPolicy: IfNotPresent` il nodo non riscarica un'immagine già in cache. Per questo l'Agent-Core usa `pullPolicy: Always` (vedi §TAKE AWAY, errore #5).
 
 ---
 
-## ⚙️ 5. APP (Architettura e Struttura Helm Chart)
+## ⚙️ 5. APP — Architettura del Pod a 7 Container
 
-L'applicazione implementa una topologia ad **Alta Coesione Locale** (Pod Multicontainer): tutti i componenti necessari al funzionamento di Firecrawl convivono nello stesso Pod e comunicano tramite l'interfaccia di loopback (`localhost`), garantendo latenze di rete pari a zero e rimuovendo la necessità di configurare complessi DNS interni di Kubernetes.
+L'app adotta una topologia ad **Alta Coesione Locale**: tutti i componenti vivono nello stesso Pod e comunicano via `localhost`, azzerando la latenza di rete e la complessità DNS interna.
 
-### 5.1 I 6 Container Co-Locati nel Pod
+> 📊 Schema completo del Pod (routing e flussi interni): [`docs/01-architettura-software.md`](docs/01-architettura-software.md).
 
-| Container | Ruolo | Porta interna |
-|---|---|---|
-| `firecrawl-api` (main) | Orchestrazione dello scraping, esegue `harness.js`. Ciclo Node.js in linea che funge da `depends_on` dinamico, attendendo l'apertura delle porte dei database sidecar prima di avviarsi. | 3002 |
-| `nginx-frontend` | Reverse proxy e web server (`nginx:alpine`). Serve i file statici dell'UI e inoltra le chiamate `/v1/*` al container Firecrawl. | 8080 |
-| `playwright-service` | Browser headless Chromium per il rendering JS delle pagine complesse. | 3000 |
-| `redis` | Cache in-memory, rate-limiter e gestione stato code job. | 6379 |
-| `rabbitmq` | Message broker AMQP per la distribuzione dei task tra worker paralleli. | 5672 |
-| `nuq-postgres` | Database relazionale per lo storage strutturato dei dati estratti. | 5432 |
+### 5.1 I 7 container
 
-### 5.2 Endpoint Esposti
+| # | Container | Ruolo | Porta | Dettaglio |
+|---|---|---|---|---|
+| 1 | `firecrawl-api` (main) | Core engine scraping (`harness.js`) | 3002 | Script `until` in Node.js: aspetta che RabbitMQ (5672) e Postgres (5432) siano pronti prima di avviarsi. |
+| 2 | `nginx-frontend` | Reverse proxy + web server | 8080 | `/` serve le pagine statiche; `/v1/*` → Firecrawl; `/api/agent/*` → agent-core. |
+| 3 | `playwright-service` | Headless Chromium (render JS) | 3000 | |
+| 4 | `redis` | Cache / rate-limit / stato code | 6379 | |
+| 5 | `rabbitmq` | Message broker AMQP | 5672 | |
+| 6 | `nuq-postgres` | DB relazionale **+ vettoriale** | 5432 | Immagine **custom**: `nuq-postgres` + `pgvector`. |
+| 7 | **`agent-core`** | **Orchestratore AI** (RAG + Log Analysis + RCA) | 8000 | FastAPI/Python. Legge i pod via ServiceAccount + RBAC. |
 
-Tramite Nginx (porta interna 8080, esposta come NodePort/ClusterIP a seconda della configurazione), l'app risponde a:
+### 5.2 Endpoint esposti (via Nginx, NodePort `31181`)
 
-- `GET /` → Interfaccia utente web.
-- `POST /v1/scrape` → Endpoint per inviare richieste di conversione URL → Markdown.
+- `GET /` → UI (scraper Firecrawl).
+- `POST /v1/scrape`, `POST /v1/crawl` → Firecrawl.
+- `/api/agent/*` → Agent-Core (vedi §6).
+- Pagine: `/index.html` (scraper), `/agent.html` (RAG multi-progetto), `/krateo-health.html` (health + RCA).
 
-### 5.3 File `chart/values.yaml`
-
-Espone l'interfaccia di configurazione globale: credenziali predefinite, disattivazione dei tentativi di Firecrawl di avviare container Docker interni (sostituiti dai sidecar stabili), e tipo di servizio.
+### 5.3 `chart/values.yaml` (estratto chiave)
 
 ```yaml
-replicaCount: 1
-
 image:
   repository: ghcr.io/lria-org/krateo-md-rag
   pullPolicy: Always
   tag: latest
 
 service:
-  type: ClusterIP
-  port: 8181
-
-ingress:
-  enabled: false
-
-# Ambiente applicativo unificato per esecuzione locale
-env:
-  HOST: "0.0.0.0"
-  PORT: "3002"
-  ENV: "local"
-  NUQ_DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
-  REDIS_URL: "redis://localhost:6379"
-  REDIS_RATE_LIMIT_URL: "redis://localhost:6379"
-  PLAYWRIGHT_MICROSERVICE_URL: "http://localhost:3000/scrape"
-  POSTGRES_HOST: "localhost"
-  POSTGRES_PORT: "5432"
-  POSTGRES_USER: "postgres"
-  POSTGRES_PASSWORD: "postgres"
-  POSTGRES_DB: "postgres"
-  USE_DB_AUTHENTICATION: "false"
-  NUM_WORKERS_PER_QUEUE: "8"
-  CRAWL_CONCURRENT_REQUESTS: "10"
-  MAX_CONCURRENT_JOBS: "5"
-  BROWSER_POOL_SIZE: "5"
-  LOGGING_LEVEL: "info"
-  BULL_AUTH_KEY: "CHANGEME"
-  ALLOW_LOCAL_WEBHOOKS: "false"
-  BLOCK_MEDIA: "false"
-  EXTRACT_WORKER_PORT: "3004"
-  WORKER_PORT: "3005"
-  NUQ_RABBITMQ_URL: "amqp://localhost:5672"
-  HARNESS_STARTUP_TIMEOUT_MS: "60000"
+  type: NodePort
+  port: 31181          # evita conflitti con le porte core di Krateo
+  nodePort: 31181
 
 sidecars:
-  playwright:
-    image: ghcr.io/firecrawl/playwright-service:latest
-  redis:
-    image: redis:7-alpine
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-  postgres:
-    image: ghcr.io/firecrawl/nuq-postgres:latest
+  playwright: { image: ghcr.io/firecrawl/playwright-service:latest }
+  redis:      { image: redis:7-alpine }
+  rabbitmq:   { image: rabbitmq:3.13-management-alpine }
+  postgres:   { image: ghcr.io/lria-org/krateo-nuq-postgres:latest }   # custom + pgvector
+  agentCore:  { image: ghcr.io/lria-org/krateo-agent-core:latest }
+
+agentCore:
+  enabled: true
+  port: 8000
+  pullPolicy: Always
+  env:
+    EMBED_PROVIDER: "ollama"
+    OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+    MODEL_NAME: "gemma2:9b"
+    MODEL_EMBEDDING_NAME: "nomic-embed-text"
+    EMBED_DIM: "768"
+    AGENT_DB_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
+
+rbac:
+  create: true          # ClusterRole per leggere pods, pods/log, events
 ```
 
-### 5.4 File `chart/templates/deployment.yaml`
+### 5.4 `deployment.yaml` — trucchi
 
-Il cuore dell'infrastruttura: definisce i 6 container, le readiness probe e monta i volumi delle ConfigMap. Il blocco `command` del container principale implementa un meccanismo di sincronizzazione dinamica via Node.js, per evitare che Firecrawl vada in crash se avviato prima che RabbitMQ e Postgres siano pronti:
+- **Sincronizzazione startup**: il container principale attende con un loop `until` che le porte di RabbitMQ e Postgres siano aperte, evitando crash da race all'avvio.
+- **Rollout mirato su modifica ConfigMap**: annotazioni `checksum/config-*` (hash di `static/index.html`, `agent.html`, `krateo-health.html`, nginx). Se cambia una pagina, Argo ricrea **solo** i pod, senza toccare cluster/release.
+- **Volumi**: le pagine statiche sono iniettate via ConfigMap e montate in Nginx a runtime (niente rebuild dell'immagine per una modifica UI).
 
-```yaml
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              echo "==> [STARTUP] Controllo disponibilità di RabbitMQ (porta 5672)..."
-              until node -e "const net = require('net'); const c = net.connect({port: 5672, host: 'localhost'}, () => process.exit(0)); c.on('error', () => process.exit(1));" 2>/dev/null; do
-                echo "==> [STARTUP] RabbitMQ non è ancora pronto. Ricontrollo tra 2 secondi..."
-                sleep 2
-              done
+### 5.5 Postgres custom con pgvector
 
-              echo "==> [STARTUP] Controllo disponibilità di Postgres (porta 5432)..."
-              until node -e "const net = require('net'); const c = net.connect({port: 5432, host: 'localhost'}, () => process.exit(0)); c.on('error', () => process.exit(1));" 2>/dev/null; do
-                echo "==> [STARTUP] Postgres non è ancora pronto. Ricontrollo tra 2 secondi..."
-                sleep 2
-              done
+L'immagine ufficiale `ghcr.io/firecrawl/nuq-postgres` è `postgres:17` + `pg_cron`, **senza pgvector**. Poiché l'Agent-Core memorizza gli embedding in una colonna `vector`, serve l'estensione. Immagine custom in `app/nuq-postgres/Dockerfile`:
 
-              echo "==> [STARTUP] Tutti i servizi backend sono ONLINE! Avvio Firecrawl..."
-              node dist/src/harness.js --start-docker
+```dockerfile
+FROM ghcr.io/firecrawl/nuq-postgres:latest
+ARG PG_MAJOR=17
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      postgresql-${PG_MAJOR}-pgvector && rm -rf /var/lib/apt/lists/*
+COPY 020-pgvector.sql /docker-entrypoint-initdb.d/020-pgvector.sql
 ```
 
-Sezione `volumes`, per montare l'interfaccia utente statica a runtime dentro Nginx:
+### 5.6 ConfigMap HTML/Nginx
 
-```yaml
-          volumeMounts:
-            - name: html-files
-              mountPath: /usr/share/nginx/html
-            - name: nginx-config
-              mountPath: /etc/nginx/conf.d
-      volumes:
-        - name: html-files
-          configMap:
-            name: {{ include "fireworks-app.fullname" . }}-html
-        - name: nginx-config
-          configMap:
-            name: {{ include "fireworks-app.fullname" . }}-nginx-config
-```
-
-### 5.5 File `chart/templates/configmap-html.yaml`
-
-Inietta il contenuto di `static/index.html` direttamente nel filesystem di Kubernetes, rendendolo leggibile da Nginx senza bisogno di ricompilare l'immagine Docker a ogni modifica del frontend:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "fireworks-app.fullname" . }}-html
-data:
-  index.html: |
-{{ .Files.Get "static/index.html" | indent 4 }}
-```
-
-### 5.6 File `chart/templates/configmap-nginx.yaml`
-
-Contiene la configurazione di routing `nginx.conf` per lo split del traffico tra Frontend (`/`) e API (`/v1/*`) verso il container Firecrawl.
+`configmap-html.yaml` inietta `index.html`, `agent.html` e `krateo-health.html`. `configmap-nginx.yaml` fa lo split del traffico: `/` (statico), `/v1/*` → `localhost:3002` (Firecrawl), `/api/agent/*` → `localhost:8000` (agent-core, con `client_max_body_size` e `proxy_read_timeout` alti per upload MD e risposte LLM lente).
 
 ---
 
-## 🚀 6. Primo Avvio (Flusso DevOps Completo)
+## 🤖 6. Agent-Core — RAG, Log Analysis & RCA
 
-### 6.1 Flusso DevOps di Rilascio
+`agent-core` è un microservizio FastAPI con **endpoint separati** (ogni chiamata fa una cosa sola; `/analyze` compone le altre). Provider LLM configurabile a caldo (Ollama di default, OpenAI opzionale).
 
-1. **Modifica del codice Frontend**: lo sviluppatore modifica il file `app/web/index.html` in locale.
-2. **Allineamento statico**: il file viene copiato nella cartella del chart (`chart/static/index.html`).
-3. **Rilascio locale**: Helm disinstalla la vecchia release e riapplica i manifesti, aggiornando la ConfigMap sul cluster istantaneamente.
-4. **Push su GitHub**: al completamento delle feature, un `git push` attiva la GitHub Action, che compila l'immagine core e aggiorna il tag remoto per l'ambiente gestito da ArgoCD.
+> 📊 Sequenza runtime dell'analisi RCA (log + retrieval RAG + LLM): [`docs/05-flusso-rag-log-agente.md`](docs/05-flusso-rag-log-agente.md).
 
-### 6.2 Comandi Operativi per il Reset del Rilascio
+### 6.1 Isolamento e KB
 
-Per sincronizzare l'HTML aggiornato e forzare un aggiornamento radicale di tutti i componenti del cluster locale:
+- Schema Postgres dedicato `agent` (non tocca le tabelle di Firecrawl).
+- `projects` (id, nome, pod associati) e `documents_embeddings` (chunk MD + `vector(768)`), isolati per `project_id`.
+- Retrieval per progetto o **globale** su tutta la KB.
 
-```bash
-# Sincronizza l'HTML aggiornato nella cartella del Chart Helm
-mkdir -p chart/static
-cp app/web/index.html chart/static/index.html
+### 6.2 Endpoint principali
 
-# Esegue il wipe completo della vecchia istanza applicativa
-helm uninstall firecrawl -n krateo-demo
+| Metodo | Path | Cosa fa |
+|---|---|---|
+| GET | `/api/agent/health` | Liveness. |
+| GET/POST | `/api/agent/config` | Legge/aggiorna provider e modelli a caldo. |
+| GET/POST | `/api/agent/projects` | Lista / crea progetto (idempotente, get-or-create). |
+| POST | `/api/agent/projects/{id}/upload` | Ingestione MD → chunk → embedding → pgvector. |
+| POST | `/api/agent/projects/{id}/rag` | Retrieval (solo ricerca vettoriale). |
+| GET | `/api/agent/k8s/pods` | Lista pod di uno o più namespace con stato/errori. |
+| GET | `/api/agent/k8s/pods/{ns}/{name}/log` | Log di un singolo pod. |
+| POST | `/api/agent/k8s/analyze` | 🧠 **RCA**: bundle (describe + eventi + log) + RAG → report LLM. |
 
-# Installa il pacchetto aggiornato con le nuove configurazioni
-helm install firecrawl ./chart -n krateo-demo
+### 6.3 Le tre pagine
+
+Tutte e tre condividono lo **stesso header di navigazione** (barra in alto, identica su ogni pagina) con i link diretti a **🔥 Scraper**, **🤖 RAG** e **🩺 Log & Health**; la pagina corrente è evidenziata.
+
+- **`index.html`** (**🔥 Scraper** Firecrawl): crawl di un sito → Markdown, con export cartella/ZIP/MEGA MD **e** pulsante **"🧠 Ingesta in RAG"** che invia il MEGA MD direttamente alla KB dell'Agente.
+- **`agent.html`** (**🤖 RAG**): gestione progetti, upload KB, health-check per progetto.
+- **`krateo-health.html`** (**🩺 Log & Health**): selezioni il namespace → vedi i pod con gli **errori evidenziati** → click su un pod → **log** → icona **🧠** che lancia l'Agente. L'Agente raccoglie describe + eventi + log reali, li confronta con la RAG e produce **Stato pod / Problemi / RCA / Azioni correttive**.
+
+### 6.4 RBAC per la lettura dei log
+
+L'Agent-Core legge il cluster tramite il ServiceAccount del pod. Il `ClusterRole` concede:
+
+```yaml
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
 ```
 
-### 6.3 Automazione del Canale di Rete (`port-forward.sh`)
+### 6.5 Analisi multi-scopo (prompt-driven)
 
-Per evitare interferenze con le porte core di Krateo (console globale, ArgoCD) ed esporre l'applicazione senza occupare il terminale, è stato sviluppato uno script di automazione per il tunnel.
+Il motore non è vincolato alla sola RCA. A parità di **log reali** e **contesto RAG**, cambiando il **prompt di analisi** si ottengono lenti diverse sullo stato del cluster: **Root Cause Analysis** per il troubleshooting, ma anche **FinOps** (ottimizzazione costi/risorse), **Security review**, **Compliance** o verifica delle best practice architetturali. Lo stesso agente diventa così una piattaforma di analisi multi-scopo: RAG e log restano invariati, il prompt definisce la "lente".
 
-Creare lo script `port-forward.sh` nella root del progetto:
+---
+
+## 🚀 7. Flusso DevOps (GitOps completo)
+
+> 📊 Schemi di riferimento: [`docs/02-processo-deploy.md`](docs/02-processo-deploy.md) (push → CI → Argo) e [`docs/04-aggiornamento-composition.md`](docs/04-aggiornamento-composition.md) (modifica della Composition).
+
+Il ciclo di rilascio quando l'app è gestita da Krateo/Argo:
+
+1. **Modifica** codice/chart in locale (es. una pagina in `chart/static/`, o `agent-core/`).
+2. **Commit + push** su `main`.
+3. **CI** (GitHub Actions) builda e pusha le **3 immagini** su GHCR. *Aspetta che sia verde.*
+4. **Sync ArgoCD** (manuale): `kubectl patch application ... operation sync` (§3.1).
+5. Argo riconcilia il chart → **nuovo pod 7/7** in `fireworks-app`.
+6. **Accesso** via port-forward.
+
+### 7.1 `script/port-forward.sh`
+
+Aggiornato al deploy GitOps (namespace `fireworks-app`, service scaffoldato da Krateo, porta `31181`):
 
 ```bash
-#!/bin/bash
-
-PORT=8181
-NAMESPACE="krateo-demo"
-SERVICE="firecrawl-fireworks-app-skeleton"
-
-echo "🔄 Pulizia: controllo se ci sono vecchi tunnel aperti sulla porta $PORT..."
-PID=$(lsof -t -i:$PORT)
-if [ ! -z "$PID" ]; then
-    echo "💀 Trovato tunnel residuo (PID: $PID). Lo chiudo..."
-    kill -9 $PID
-    sleep 1
-fi
-
-echo "🔌 Attivo il nuovo port-forward in background..."
+PORT=31181
+NAMESPACE="fireworks-app"
+SERVICE="krateo-md-rag-<hash>-fireworks-app-skeleton"
 kubectl port-forward svc/$SERVICE $PORT:$PORT -n $NAMESPACE > /dev/null 2>&1 &
-
-sleep 2
-
-if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null ; then
-    echo "========================================================"
-    echo "✅ ARCHITETTURA DI RETE ATTIVA!"
-    echo "🌐 Accedi al Frontend e alle API su: http://localhost:$PORT"
-    echo "========================================================"
-else
-    echo "❌ Errore: Il tunnel non è partito. Verifica lo stato del Pod."
-fi
 ```
 
-Abilitare i permessi di esecuzione ed avviare lo script:
+Applicazione accessibile su **http://localhost:31181** → `/krateo-health.html` per l'Agente.
+
+### 7.2 Verifiche post-deploy
 
 ```bash
-chmod +x port-forward.sh
-./port-forward.sh
+kubectl get pods -n fireworks-app                     # atteso 7/7 Running
+# pgvector presente nel Postgres custom?
+kubectl exec -n fireworks-app deploy/<release> -c nuq-postgres -- \
+  psql -U postgres -tc "SELECT extname FROM pg_extension WHERE extname='vector';"
 ```
 
-Il terminale torna immediatamente disponibile. L'applicazione è accessibile in modo permanente all'indirizzo:
+---
 
-**http://localhost:8181**
+## 🔁 8. Evoluzione: dal Report all'Azione (remediation loop)
 
-Nginx gestisce autonomamente il caricamento dell'interfaccia grafica e la deviazione trasparente delle richieste di scraping verso il core engine di Firecrawl.
+L'analisi non è il capolinea. La sezione **Azioni Correttive** del report è un output strutturato e macchina-leggibile (comandi `kubectl` e patch YAML): può diventare l'input di un ciclo di remediation che **Krateo mette in atto sull'infrastruttura** restando nel modello dichiarativo.
+
+Come si chiude il loop:
+
+1. L'Agente propone la correzione (patch YAML / bump di versione / fix di config), ancorata alla causa radice identificata dalla RAG.
+2. La proposta **non** viene applicata a mano sul cluster: viene tradotta in una modifica al repository (`values.yaml`, ConfigMap, manifest). La fonte di verità resta Git.
+3. Krateo **ricompone**: il `core-provider` rilegge il Blueprint aggiornato e rigenera la Composition ([`docs/04-aggiornamento-composition.md`](docs/04-aggiornamento-composition.md)).
+4. **ArgoCD sincronizza** lo stato desiderato sul cluster, applicando la correzione in modo tracciato e reversibile.
+5. L'Agente può **rianalizzare** i log post-intervento e verificare la risoluzione.
+
+> Vantaggio: nessuna azione distruttiva fuori controllo. Ogni remediation passa da Git — versionata, revisionabile (approvazione umana opzionale prima del sync) e reversibile con un rollback. Si può scegliere tra suggerimento assistito (human-in-the-loop) e remediation completamente automatica a seconda della criticità.
+
+---
+
+## 🧭 TAKE AWAY — Errori comuni del deploy GitOps (Argo / Composition / Provider) dai miei appunti giornalieri
+
+Diario degli intoppi reali incontrati, con sintomo → causa → fix. Sono il 90% dei problemi in un deploy sincronizzato Krateo/Argo.
+
+### Composition & ArgoCD
+
+**1. `one or more objects failed to apply, reason: namespaces "<ns>" not found`**
+La `destination.namespace` dell'Application (`fireworks-app`) non esiste e non c'è `CreateNamespace=true`. → **Crea il namespace a mano** (`kubectl create namespace fireworks-app`). Non patchare lo spec dell'Application per aggiungere `syncOptions`: è generato dalla blueprint e verrebbe **riscritto**. Per una soluzione GitOps-pura, codifica la creazione del namespace nella composition.
+
+**2. Application `OutOfSync / Missing`, ma non deploya nulla**
+`syncPolicy` è **manuale**: Argo vede il drift ma aspetta. → Lancia il sync (`kubectl patch ... operation`), o premi Sync nella UI Argo. Se vuoi automatismo, imposta `syncPolicy.automated` **nella composition**, come ho fatto io per questa POC sfruttando a pieno l'automatismo.
+
+**3. Il pod che gira non è quello di Argo (naming diverso)**
+Un `helm install` **manuale** parallelo (release `firecrawl` in `krateo-demo`) convive con lo stack GitOps (`krateo-md-rag-<hash>-...` in `fireworks-app`). → **Una sola sorgente di verità**: `helm uninstall firecrawl -n krateo-demo` e lascia gestire ad Argo con la sync delle policy attiva (vedi sopra -ndr-).
+
+**4. `provided port 31181 is already allocated` (NodePort conflict)**
+Due Service chiedono lo stesso NodePort (il release manuale e quello GitOps). Il NodePort è unico a livello di cluster. → Rimuovi il doppione (errore #3) o cambia porta.
+
+**5. Il fix è pushato e la CI è verde, ma il pod non cambia**
+Tag mobile `:latest` + `pullPolicy: IfNotPresent`: il nodo Kind tiene in cache la vecchia immagine e non la riscarica; inoltre se il podspec non cambia, Argo non fa rollout. → `pullPolicy: Always` (e/o `kubectl rollout restart`). Meglio ancora: **tag immutabili** per SHA invece di `:latest`.
+
+**6. `ImagePullBackOff` sulle immagini nuove**
+I package GHCR nascono **Private** e i nodi Kind non li vedono. → Rendi i package **Public** o assicura che `ghcr-secret` (org-wide) copra `krateo-agent-core` e `krateo-nuq-postgres`, nel namespace giusto (`fireworks-app`).
+
+**7. `fromRepo vs toRepo` dal Krateo Portal**
+La gestione dei values nel portale non è molto chiara per una gestione della UI con scelte grafiche che abbassano la comprensione dei valori e la loro gerarchia. Spesso si confondono i valori con stessa KEY ma gruppo diverso. Es. **fromRepo** e **toRepo** hanno i secret entrambi e va fatta attenzione a impostarli correttamente, la dichiarazione del gruppo della chiave è poco leggibile.
+
+**8. Sync fallisce solo dopo aver aggiunto RBAC**
+La `ClusterRoleBinding` referenzia un ServiceAccount in `.Release.Namespace`; se quel namespace non esiste, `kubectl auth reconcile` fallisce. → È il sintomo dell'errore #1: crea prima il namespace.
+
+### Provider & immagini
+
+**9. `agent-core` in CrashLoop: `vector type not found in the database`**
+`register_vector()` viene chiamato prima che l'estensione esista. → In `init_db()` esegui `CREATE EXTENSION vector` con una connessione **raw** (senza `register_vector`) e solo dopo registra il tipo.
+
+**10. `CREATE EXTENSION vector` fallisce nel pod**
+L'immagine `firecrawl/nuq-postgres` **non** contiene pgvector (solo `pg_cron`). → Usa l'immagine custom `krateo-nuq-postgres` (`FROM nuq-postgres` + `postgresql-17-pgvector`).
+
+### RAG / dati / AI-App
+
+**11. Upload MD → 500 `cannot dump lists of mixed types; got: float, int`**
+L'embedding di Ollama mescola `int` e `float` (es. uno `0`), e psycopg rifiuta gli array a tipi misti. → Forza tutti i valori a `float` in `llm.embed()`.
+
+**12. Query RAG → 500 `operator does not exist: vector <=> double precision[]`**
+Il parametro embedding viene inviato come array Postgres, non come `vector`; l'operatore `<=>` non fa cast impliciti. → Passa il literal `[...]` con cast esplicito `%s::vector`.
+
+**13. Crea progetto → 500 `duplicate key value violates unique constraint`**
+Nome progetto già esistente (re-run smoke test o re-ingest dello stesso sito). → `create_project` idempotente con `INSERT ... ON CONFLICT (name) DO UPDATE`.
+
+**14. RAG "in errore" ma Ollama sembra su**
+Dentro un pod Kind, `host.docker.internal` **può non risolvere** verso il Mac dove gira Ollama → l'embedding fallisce con connection refused/timeout. → Verifica la raggiungibilità pod→Ollama (o esponi Ollama in modo raggiungibile dal cluster). Guarda i log di `agent-core`, non gli health probe che li seppelliscono.
+
+### Metodo (dal DAY 1)
+
+**15. La documentazione ufficiale Krateo sul networking locale è risultata obsoleta.** La verità è nei manifesti YAML reali e nel `README.md` del repo della composition definition di Krateo.
+
+**16. Il portale Krateo è limitato per il debug** (niente streaming log per-container, niente auto-esposizione porte): tieni sempre a portata `kubectl` (logs, describe, get events) per il troubleshooting.
+
+---
+
+*Ultimo aggiornamento: 2026-07-13 — stack a 7 container (Firecrawl + Agent RAG/RCA), deploy GitOps via ArgoCD nel namespace `fireworks-app`, CI a 3 immagini su GHCR. Diagrammi di riferimento in [`docs/`](docs/README.md).*
